@@ -1,0 +1,19 @@
+# Datasource comes from the Testcontainers @ServiceConnection.
+spring:
+  flyway:
+    clean-disabled: false
+
+fsp:
+  runs:
+    # Tight flush cadence so an acceptance test does not have to wait for data to appear.
+    flush-interval-ticks: 1
+    flush-interval-millis: 20
+    max-ticks-per-second: 5000
+    recover-on-startup: false
+    keep-auto-checkpoints: 3
+
+logging:
+  level:
+    dev.fsp: INFO
+    org.testcontainers: WARN
+    com.github.dockerjava: WARN

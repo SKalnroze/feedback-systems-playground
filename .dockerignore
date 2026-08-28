@@ -1,0 +1,32 @@
+# Everything here is either regenerated inside the image or has no business in it. Without this
+# the build context includes node_modules and every Gradle output directory, which is well over a
+# hundred megabytes shipped to the daemon on every single build.
+
+# Dependencies and build output - reinstalled and rebuilt in the image
+**/node_modules
+**/dist
+**/build
+**/.gradle
+**/.vite
+
+# Test and coverage artefacts
+**/playwright-report
+**/test-results
+**/coverage
+
+# Version control and editor state
+.git
+.gitignore
+.idea
+.vscode
+**/*.iml
+
+# Local environment
+.env
+.env.local
+**/*.log
+
+# Documentation and compose files: not needed to build either image
+docs
+README.md
+compose*.yaml

@@ -1,0 +1,22 @@
+package dev.fsp.engine.rng;
+
+/**
+ * Independent random streams. Each phase of the tick pipeline draws from its own stream so
+ * that adding a draw in one phase cannot shift the numbers seen by another phase.
+ */
+public enum RngStream {
+    EVENT_GENERATION,
+    EVENT_SCHEDULE,
+    EVENT_TARGETING,
+    EVENT_EFFECT,
+    TRIGGER_STOCHASTIC,
+    INTERACTION_SELECTION,
+    INTERACTION_OUTCOME,
+    OBSERVATION,
+    MEMORY_NOISE,
+    MODULE_CUSTOM;
+
+    public int id() {
+        return ordinal();
+    }
+}

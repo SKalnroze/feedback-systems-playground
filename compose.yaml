@@ -1,0 +1,71 @@
+# Feedback Systems Playground, all of it, locally.
+#
+#   docker compose up --build -d      start everything
+#   docker compose logs -f backend    watch the engine
+#   docker compose down               stop, keeping the database
+#   docker compose down -v            stop and discard the database
+
+name: feedback-systems-playground
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: fsp
+      POSTGRES_USER: fsp
+      POSTGRES_PASSWORD: ${FSP_DB_PASSWORD:-fsp}
+    volumes:
+      # Postgres 18 images store data in a major-version subdirectory, so the volume
+      # mounts one level up. Mounting /var/lib/postgresql/data directly makes the
+      # container refuse to start.
+      - postgres-data:/var/lib/postgresql
+    ports:
+      # Exposed so the database can be inspected from the host while a run is going.
+      - "${FSP_DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fsp -d fsp"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    depends_on:
+      postgres:
+        # Flyway runs at startup, so the database has to be accepting connections first.
+        condition: service_healthy
+    environment:
+      FSP_DB_URL: jdbc:postgresql://postgres:5432/fsp
+      FSP_DB_USER: fsp
+      FSP_DB_PASSWORD: ${FSP_DB_PASSWORD:-fsp}
+      FSP_PORT: 8080
+      # The browser sends an Origin header on every write, even same-origin, so the port the UI is
+      # published on has to be listed here or those writes come back 403.
+      FSP_WEB_ALLOWED_ORIGINS: http://localhost:${FSP_WEB_PORT:-3000},http://127.0.0.1:${FSP_WEB_PORT:-3000}
+    ports:
+      - "${FSP_API_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health/readiness || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 40s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FSP_WEB_PORT:-3000}:80"
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

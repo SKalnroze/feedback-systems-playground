@@ -1,0 +1,40 @@
+# Just the infrastructure, for working on the backend and frontend natively with hot reload.
+#
+#   docker compose -f compose.dev.yaml up -d
+#   cd backend && ./gradlew :app:bootRun
+#   cd frontend && pnpm dev
+
+name: feedback-systems-playground-dev
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: fsp
+      POSTGRES_USER: fsp
+      POSTGRES_PASSWORD: fsp
+    volumes:
+      # Postgres 18 images store data in a major-version subdirectory, so the volume
+      # mounts one level up. Mounting /var/lib/postgresql/data directly makes the
+      # container refuse to start.
+      - postgres-dev-data:/var/lib/postgresql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fsp -d fsp"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  adminer:
+    image: adminer:5
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8081:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+
+volumes:
+  postgres-dev-data:

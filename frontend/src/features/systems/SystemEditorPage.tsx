@@ -6,12 +6,15 @@ import {
   Button,
   Card,
   ErrorNote,
-  Field,
-  Input,
   Select,
   Spinner,
 } from "@/components/ui/primitives";
 import { DecayInspector, LinkInspector, LoopSummary } from "@/features/systems/Inspector";
+import { EventInspector, ObjectInspector, TriggerInspector } from "@/features/systems/ElementInspectors";
+import { MemorySettingsFields } from "@/features/systems/MemorySettingsFields";
+import { ObjectTypeDialog } from "@/features/objects/ObjectTypeDialog";
+import { TemplateStatus } from "@/features/objects/TemplateStatus";
+import { useSpecHistory } from "@/features/systems/useSpecHistory";
 import { NODE_TYPES } from "@/features/systems/nodes";
 import {
   handleId,
@@ -52,6 +55,15 @@ export function SystemEditorPage() {
   );
 }
 
+/** What the inspector pane is currently showing. */
+type Selection =
+  | { kind: "link"; id: string }
+  | { kind: "type"; id: string }
+  | { kind: "object"; id: string }
+  | { kind: "event"; id: string }
+  | { kind: "trigger"; id: string }
+  | null;
+
 function EditorInner({ systemId }: { systemId: string }) {
   const system = useSystem(systemId);
   const versions = useVersions(systemId);
@@ -61,16 +73,22 @@ function EditorInner({ systemId }: { systemId: string }) {
   const validation = useDraftValidation(systemId);
   const navigate = useNavigate();
 
-  const [spec, setSpec] = useState<SystemSpec | null>(null);
-  const [selection, setSelection] = useState<{ kind: "link"; id: string } | { kind: "type"; id: string } | null>(
-    null,
-  );
+  const { spec, update, reset, undo, redo, canUndo, canRedo } = useSpecHistory(null);
+  const [selection, setSelection] = useState<Selection>(null);
   const [publishError, setPublishError] = useState<string | null>(null);
+  const [typeDialogOpen, setTypeDialogOpen] = useState(false);
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
-    if (system.data?.draft && !spec) setSpec(system.data.draft);
-  }, [system.data?.draft, spec]);
+    if (system.data?.draft && !spec) reset(system.data.draft);
+  }, [system.data?.draft, spec, reset]);
+
+  // How many instances each authored object stands for, so the link inspector can explain a
+  // coupling using the numbers this system actually has rather than in the abstract.
+  const memberCounts = useMemo(
+    () => new Map((spec?.objects ?? []).map((object) => [object.id, object.count])),
+    [spec],
+  );
 
   const graph = useMemo(() => (spec ? specToGraph(spec) : { nodes: [], edges: [] }), [spec]);
   const [nodes, setNodes, onNodesChange] = useNodesState<SpecNode>(graph.nodes);
@@ -99,10 +117,29 @@ function EditorInner({ systemId }: { systemId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spec, dirty]);
 
-  const update = useCallback((mutate: (current: SystemSpec) => SystemSpec) => {
-    setSpec((current) => (current ? mutate(current) : current));
-    setDirty(true);
-  }, []);
+  // Any edit marks the draft dirty; the autosave effect above does the writing.
+  const edit = useCallback(
+    (mutate: (current: SystemSpec) => SystemSpec) => {
+      update(mutate);
+      setDirty(true);
+    },
+    [update],
+  );
+
+  // Ctrl+Z and Ctrl+Shift+Z, skipped while typing so they do not fight the text fields.
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const typing = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
+      if (typing || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z") return;
+      event.preventDefault();
+      if (event.shiftKey) redo();
+      else undo();
+      setDirty(true);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, redo]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -110,16 +147,32 @@ function EditorInner({ systemId }: { systemId: string }) {
       const source = refFromHandle(connection.sourceHandle.replace("::source", ""));
       const target = refFromHandle(connection.targetHandle.replace("::target", ""));
       if (!source || !target) return;
-      update((current) => ({
+      edit((current) => ({
         ...current,
         links: [...current.links, newLink(source, target, current.links.map((link) => link.id))],
       }));
     },
-    [update],
+    [edit],
   );
 
   const selectedLink = useMemo(
     () => (selection?.kind === "link" ? (spec?.links.find((link) => link.id === selection.id) ?? null) : null),
+    [selection, spec],
+  );
+
+  const selectedObject = useMemo(
+    () => (selection?.kind === "object" ? (spec?.objects.find((item) => item.id === selection.id) ?? null) : null),
+    [selection, spec],
+  );
+
+  const selectedEvent = useMemo(
+    () => (selection?.kind === "event" ? (spec?.events.find((item) => item.id === selection.id) ?? null) : null),
+    [selection, spec],
+  );
+
+  const selectedTrigger = useMemo(
+    () =>
+      selection?.kind === "trigger" ? (spec?.triggers.find((item) => item.id === selection.id) ?? null) : null,
     [selection, spec],
   );
 
@@ -174,6 +227,28 @@ function EditorInner({ systemId }: { systemId: string }) {
 
         <div className="ml-auto flex items-center gap-2">
           <Button
+            variant="ghost"
+            onClick={() => {
+              undo();
+              setDirty(true);
+            }}
+            disabled={!canUndo}
+            title="Undo (Ctrl+Z)"
+          >
+            Undo
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              redo();
+              setDirty(true);
+            }}
+            disabled={!canRedo}
+            title="Redo (Ctrl+Shift+Z)"
+          >
+            Redo
+          </Button>
+          <Button
             variant="primary"
             disabled={publish.isPending || dirty}
             title={dirty ? "Wait for the draft to save" : "Publish an immutable version"}
@@ -205,6 +280,14 @@ function EditorInner({ systemId }: { systemId: string }) {
         </div>
       </div>
 
+      {typeDialogOpen ? (
+        <ObjectTypeDialog
+          onClose={() => setTypeDialogOpen(false)}
+          onSaveLocal={(type) => edit((current) => ({ ...current, objectTypes: [...current.objectTypes, type] }))}
+          onSaveGlobal={(type) => edit((current) => ({ ...current, objectTypes: [...current.objectTypes, type] }))}
+        />
+      ) : null}
+
       {publishError ? (
         <div className="px-4 pt-2">
           <ErrorNote message={publishError} />
@@ -217,8 +300,9 @@ function EditorInner({ systemId }: { systemId: string }) {
             spec={spec}
             objectTypes={palette.data?.objectTypes ?? []}
             rules={palette.data?.rules ?? []}
-            onUpdate={update}
+            onUpdate={edit}
             onSelectType={(id) => setSelection({ kind: "type", id })}
+            onDefineType={() => setTypeDialogOpen(true)}
           />
         </aside>
 
@@ -231,6 +315,15 @@ function EditorInner({ systemId }: { systemId: string }) {
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onEdgeClick={(_, edge) => setSelection({ kind: "link", id: edge.id })}
+            onNodeClick={(_, node) => {
+              // Node ids are prefixed by kind to keep them unique across the canvas; the spec
+              // element is addressed by the part after the colon.
+              const [kind, ...rest] = node.id.split(":");
+              const id = rest.join(":");
+              if (kind === "object" || kind === "event" || kind === "trigger") {
+                setSelection({ kind, id });
+              }
+            }}
             fitView
             proOptions={{ hideAttribution: false }}
             defaultEdgeOptions={{ type: "smoothstep" }}
@@ -251,16 +344,76 @@ function EditorInner({ systemId }: { systemId: string }) {
           {selectedLink ? (
             <LinkInspector
               link={selectedLink}
+              memberCounts={memberCounts}
               onChange={(link: LinkSpec) =>
-                update((current) => ({
+                edit((current) => ({
                   ...current,
                   links: current.links.map((item) => (item.id === link.id ? link : item)),
                 }))
               }
               onDelete={() => {
-                update((current) => ({
+                edit((current) => ({
                   ...current,
                   links: current.links.filter((item) => item.id !== selectedLink.id),
+                }));
+                setSelection(null);
+              }}
+            />
+          ) : selectedObject ? (
+            <ObjectInspector
+              object={selectedObject}
+              type={spec?.objectTypes.find((type) => type.id === selectedObject.typeId)}
+              onChange={(object) =>
+                edit((current) => ({
+                  ...current,
+                  objects: current.objects.map((item) => (item.id === object.id ? object : item)),
+                }))
+              }
+              onDelete={() => {
+                edit((current) => ({
+                  ...current,
+                  objects: current.objects.filter((item) => item.id !== selectedObject.id),
+                  // Links pointing at a deleted object would fail validation on the next publish.
+                  links: current.links.filter(
+                    (link) =>
+                      !(link.source.kind === "object" && link.source.objectId === selectedObject.id) &&
+                      !(link.target.kind === "object" && link.target.objectId === selectedObject.id),
+                  ),
+                }));
+                setSelection(null);
+              }}
+            />
+          ) : selectedEvent ? (
+            <EventInspector
+              event={selectedEvent}
+              objectTypes={spec?.objectTypes ?? []}
+              onChange={(event) =>
+                edit((current) => ({
+                  ...current,
+                  events: current.events.map((item) => (item.id === event.id ? event : item)),
+                }))
+              }
+              onDelete={() => {
+                edit((current) => ({
+                  ...current,
+                  events: current.events.filter((item) => item.id !== selectedEvent.id),
+                }));
+                setSelection(null);
+              }}
+            />
+          ) : selectedTrigger ? (
+            <TriggerInspector
+              trigger={selectedTrigger}
+              onChange={(trigger) =>
+                edit((current) => ({
+                  ...current,
+                  triggers: current.triggers.map((item) => (item.id === trigger.id ? trigger : item)),
+                }))
+              }
+              onDelete={() => {
+                edit((current) => ({
+                  ...current,
+                  triggers: current.triggers.filter((item) => item.id !== selectedTrigger.id),
                 }));
                 setSelection(null);
               }}
@@ -268,10 +421,52 @@ function EditorInner({ systemId }: { systemId: string }) {
           ) : selectedType ? (
             <div className="space-y-3">
               <h3 className="text-sm font-semibold">{selectedType.label} memory</h3>
+              <TemplateStatus
+                type={selectedType}
+                onUpdate={(next) =>
+                  edit((current) => {
+                    const kept = new Set(next.variables.map((variable) => variable.name));
+                    const dropped = selectedType.variables
+                      .map((variable) => variable.name)
+                      .filter((name) => !kept.has(name));
+                    return {
+                      ...current,
+                      objectTypes: current.objectTypes.map((type) =>
+                        type.id === selectedType.id ? next : type,
+                      ),
+                      // A variable that no longer exists leaves overrides and links behind that
+                      // would fail validation with a message about a variable nobody can find.
+                      objects: current.objects.map((object) =>
+                        object.typeId !== selectedType.id
+                          ? object
+                          : {
+                              ...object,
+                              variables: Object.fromEntries(
+                                Object.entries(object.variables).filter(([name]) => kept.has(name)),
+                              ),
+                            },
+                      ),
+                      links: current.links.filter((link) => {
+                        const refersToDropped = (ref: (typeof link)["source"]) =>
+                          ("name" in ref ? dropped.includes(ref.name) : false) &&
+                          (ref.kind === "type-aggregate"
+                            ? ref.typeId === selectedType.id
+                            : ref.kind === "object"
+                              ? current.objects.some(
+                                  (object) =>
+                                    object.id === ref.objectId && object.typeId === selectedType.id,
+                                )
+                              : false);
+                        return !refersToDropped(link.source) && !refersToDropped(link.target);
+                      }),
+                    };
+                  })
+                }
+              />
               <DecayInspector
                 model={selectedType.memory.defaultDecay}
                 onChange={(model) =>
-                  update((current) => ({
+                  edit((current) => ({
                     ...current,
                     objectTypes: current.objectTypes.map((type) =>
                       type.id === selectedType.id
@@ -284,7 +479,7 @@ function EditorInner({ systemId }: { systemId: string }) {
               <MemorySettingsFields
                 type={selectedType}
                 onChange={(next) =>
-                  update((current) => ({
+                  edit((current) => ({
                     ...current,
                     objectTypes: current.objectTypes.map((type) =>
                       type.id === selectedType.id ? next : type,
@@ -339,66 +534,18 @@ function EditorInner({ systemId }: { systemId: string }) {
   );
 }
 
-function MemorySettingsFields({
-  type,
-  onChange,
-}: {
-  type: ObjectTypeSpec;
-  onChange: (type: ObjectTypeSpec) => void;
-}) {
-  const memory = type.memory;
-  return (
-    <div className="space-y-2">
-      <div className="grid grid-cols-2 gap-2">
-        <Field label="Retrieval threshold">
-          <Input
-            className="tabular"
-            type="number"
-            step="0.01"
-            value={memory.retrievalThreshold}
-            onChange={(event) =>
-              onChange({
-                ...type,
-                memory: { ...memory, retrievalThreshold: Number(event.target.value) },
-              })
-            }
-          />
-        </Field>
-        <Field label="Capacity" hint="0 for unlimited">
-          <Input
-            className="tabular"
-            type="number"
-            value={memory.capacity}
-            onChange={(event) =>
-              onChange({ ...type, memory: { ...memory, capacity: Number(event.target.value) } })
-            }
-          />
-        </Field>
-      </div>
-      <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
-        <input
-          type="checkbox"
-          checked={memory.pruneForgotten}
-          onChange={(event) =>
-            onChange({ ...type, memory: { ...memory, pruneForgotten: event.target.checked } })
-          }
-        />
-        Discard memories once they fall below the threshold
-      </label>
-    </div>
-  );
-}
-
 /** Left rail: what can be added, and what is already in the system. */
 function PalettePanel({
   spec,
   objectTypes,
+  onDefineType,
   rules,
   onUpdate,
   onSelectType,
 }: {
   spec: SystemSpec;
   objectTypes: ObjectTypeSpec[];
+  onDefineType: () => void;
   rules: { id: string; label: string; description: string }[];
   onUpdate: (mutate: (current: SystemSpec) => SystemSpec) => void;
   onSelectType: (id: string) => void;
@@ -448,6 +595,9 @@ function PalettePanel({
                 </option>
               ))}
           </Select>
+          <Button size="sm" title="Define a new object type" onClick={() => onDefineType()}>
+            new…
+          </Button>
           <Button
             size="sm"
             disabled={!newObjectType}
@@ -480,7 +630,7 @@ function PalettePanel({
                 ...current,
                 objects: [
                   ...current.objects,
-                  { id, typeId: type.id, label: id, variables: {}, tags: [], features: {} },
+                  { id, typeId: type.id, label: id, variables: {}, tags: [], features: {}, count: 1 },
                 ],
               };
             })

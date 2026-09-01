@@ -268,12 +268,12 @@ public sealed interface Effect {
     private static void writeVariable(EffectContext context, TargetSelector.Target target, Scope scope, String name,
             double value) {
         if (scope == Scope.GLOBAL) {
-            context.state().setGlobal(name, value);
+            context.state().setGlobal(name, context.clampToDeclaredRange(null, name, value));
             return;
         }
         ObjectState object = objectFor(target, scope);
         if (object != null) {
-            object.set(name, value);
+            object.set(name, context.clampToDeclaredRange(object.typeId(), name, value));
         }
     }
 

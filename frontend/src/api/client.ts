@@ -1,5 +1,10 @@
 import type {
   Checkpoint,
+  ObjectTemplate,
+  ObjectTemplateVersion,
+  ObjectTypeSpec,
+  ExperimentComparison,
+  ExperimentView,
   LogEntry,
   MemoryView,
   ModuleView,
@@ -11,6 +16,7 @@ import type {
   RunSummary,
   SeriesDefinition,
   SeriesResponse,
+  SpecDiffReport,
   SystemDefinition,
   SystemSpec,
   SystemVersion,
@@ -81,7 +87,8 @@ export const api = {
   palette: () => request<PaletteView>("/palette"),
 
   // --- systems ---
-  systems: () => request<SystemDefinition[]>("/systems"),
+  systems: (limit = 100, offset = 0) =>
+    request<SystemDefinition[]>(`/systems?limit=${limit}&offset=${offset}`),
   system: (id: string) => request<SystemDefinition>(`/systems/${id}`),
   createSystem: (name: string, description: string, draft: SystemSpec | null) =>
     request<SystemDefinition>("/systems", { method: "POST", ...json({ name, description, draft }) }),
@@ -103,13 +110,35 @@ export const api = {
   validateSpec: (spec: SystemSpec) =>
     request<ValidationReport>("/systems/validate", { method: "POST", ...json({ spec }) }),
 
+  // --- object templates ---
+  objectTemplates: () => request<ObjectTemplate[]>("/object-templates"),
+  objectTemplate: (id: string) => request<ObjectTemplate>(`/object-templates/${id}`),
+  createObjectTemplate: (name: string, description: string, draft: ObjectTypeSpec) =>
+    request<ObjectTemplate>("/object-templates", { method: "POST", ...json({ name, description, draft }) }),
+  saveObjectTemplate: (id: string, name: string, description: string, draft: ObjectTypeSpec) =>
+    request<ObjectTemplate>(`/object-templates/${id}/draft`, {
+      method: "PUT",
+      ...json({ name, description, draft }),
+    }),
+  deleteObjectTemplate: (id: string) => request<void>(`/object-templates/${id}`, { method: "DELETE" }),
+  publishObjectTemplate: (id: string) =>
+    request<ObjectTemplateVersion>(`/object-templates/${id}/versions`, { method: "POST" }),
+  objectTemplateVersions: (id: string) =>
+    request<ObjectTemplateVersion[]>(`/object-templates/${id}/versions`),
+  latestObjectTemplateVersion: (id: string) =>
+    request<ObjectTemplateVersion>(`/object-templates/${id}/versions/latest`),
+  diffObjectTemplate: (id: string, from: number, to: number) =>
+    request<SpecDiffReport>(`/object-templates/${id}/versions/${from}/diff/${to}`),
+
   // --- runs ---
-  runs: () => request<RunSummary[]>("/runs"),
+  runs: (limit = 100, offset = 0) =>
+    request<RunSummary[]>(`/runs?limit=${limit}&offset=${offset}`),
   run: (id: string) => request<RunDetail>(`/runs/${id}`),
   forks: (id: string) => request<RunSummary[]>(`/runs/${id}/forks`),
   createRun: (input: {
     systemVersionId: string;
     name?: string;
+    description?: string;
     /** Sent as a string so a 64-bit seed reaches the server exactly as the user typed it. */
     seed?: string | null;
     speed?: number | null;
@@ -120,6 +149,7 @@ export const api = {
       ...json({
         systemVersionId: input.systemVersionId,
         name: input.name ?? null,
+        description: input.description ?? "",
         seed: input.seed ?? null,
         speed: input.speed ?? null,
         autoStart: input.autoStart ?? false,
@@ -132,6 +162,13 @@ export const api = {
     }),
   setSpeed: (id: string, ticksPerSecond: number) =>
     request<RunSummary>(`/runs/${id}/speed`, { method: "PATCH", ...json({ ticksPerSecond }) }),
+  describeRun: (id: string, description: string) =>
+    request<RunSummary>(`/runs/${id}/description`, { method: "PATCH", ...json({ description }) }),
+  describeCheckpoint: (checkpointId: string, description: string) =>
+    request<void>(`/runs/checkpoints/${checkpointId}/description`, {
+      method: "PATCH",
+      ...json({ description }),
+    }),
   renameRun: (id: string, name: string) =>
     request<RunSummary>(`/runs/${id}/name`, { method: "PATCH", ...json({ name }) }),
   deleteRun: (id: string) => request<void>(`/runs/${id}`, { method: "DELETE" }),
@@ -170,6 +207,53 @@ export const api = {
     return request<Page<MemoryView>>(`/runs/${id}/memories?${query}`);
   },
   relationships: (id: string) => request<RelationshipCell[]>(`/runs/${id}/relationships`),
+
+  // --- experiments ---
+  startExperiment: (input: {
+    systemVersionId: string;
+    name?: string;
+    replicates: number;
+    seed?: string | null;
+    speed?: number | null;
+    ticks: number;
+  }) =>
+    request<ExperimentView>("/experiments", {
+      method: "POST",
+      ...json({
+        systemVersionId: input.systemVersionId,
+        name: input.name ?? null,
+        replicates: input.replicates,
+        seed: input.seed ?? null,
+        speed: input.speed ?? null,
+        ticks: input.ticks,
+      }),
+    }),
+  compareRuns: (runIds: string[], key: string, from = 0, to = -1, resolution = 0) => {
+    const query = new URLSearchParams({
+      runIds: runIds.join(","),
+      key,
+      from: String(from),
+      to: String(to),
+      resolution: String(resolution),
+    });
+    return request<ExperimentComparison>(`/experiments/compare?${query}`);
+  },
+
+  // --- versions ---
+  diffVersions: (systemId: string, fromVersionId: string, toVersionId: string) =>
+    request<SpecDiffReport>(`/systems/${systemId}/versions/${fromVersionId}/diff/${toVersionId}`),
+
+  /** Export URLs are opened directly rather than fetched: the browser should save, not parse. */
+  exportSeriesUrl: (id: string, keys: string[] = []) => {
+    const query = new URLSearchParams();
+    if (keys.length > 0) query.set("keys", keys.join(","));
+    return `${BASE}/runs/${id}/export/series.csv?${query}`;
+  },
+  exportLogUrl: (id: string, type?: string) => {
+    const query = new URLSearchParams();
+    if (type) query.set("type", type);
+    return `${BASE}/runs/${id}/export/log.csv?${query}`;
+  },
 
   /** URL of the live event stream; consumed with `EventSource`. */
   streamUrl: (id: string) => `${BASE}/runs/${id}/stream`,

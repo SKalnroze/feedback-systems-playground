@@ -89,18 +89,24 @@ public final class Engine {
         }
         for (ObjectSpec objectSpec : spec.objects()) {
             ObjectTypeSpec type = spec.objectType(objectSpec.typeId());
-            ObjectState object = new ObjectState(objectSpec.id(), objectSpec.typeId());
-            type.initialValues().forEach(object::set);
-            objectSpec.variables().forEach((name, value) -> {
-                if (type.hasVariable(name)) {
-                    object.set(name, type.variable(name).clamp(value));
-                }
-            });
-            object.tags().addAll(type.defaultTags());
-            object.tags().addAll(objectSpec.tags());
-            object.features().putAll(type.defaultFeatures());
-            object.features().putAll(objectSpec.features());
-            state.addObject(object);
+            // One authored object becomes `count` instances. They start identical; what makes them
+            // diverge is what happens to them, which is the whole point of simulating a population
+            // rather than scaling one representative by a number.
+            for (int member = 0; member < objectSpec.count(); member++) {
+                ObjectState object = new ObjectState(objectSpec.memberId(member), objectSpec.typeId(),
+                        objectSpec.id(), member);
+                type.initialValues().forEach(object::set);
+                objectSpec.variables().forEach((name, value) -> {
+                    if (type.hasVariable(name)) {
+                        object.set(name, type.variable(name).clamp(value));
+                    }
+                });
+                object.tags().addAll(type.defaultTags());
+                object.tags().addAll(objectSpec.tags());
+                object.features().putAll(type.defaultFeatures());
+                object.features().putAll(objectSpec.features());
+                state.addObject(object);
+            }
         }
         for (EventSpec event : spec.events()) {
             if (event.generator() instanceof EventGenerator.MarkovChain chain) {
@@ -389,6 +395,38 @@ public final class Engine {
         }
     }
 
+    /**
+     * Clamps a value to a variable's declared bounds.
+     *
+     * <p>Looked up from the spec rather than carried on the state: bounds are a property of the
+     * model, and a checkpoint should not have to store them to be restorable.
+     */
+    double clampToDeclaredRange(String typeId, String variable, double value) {
+        VariableSpec declared = null;
+        if (typeId == null) {
+            for (VariableSpec candidate : spec.globalVariables()) {
+                if (candidate.name().equals(variable)) {
+                    declared = candidate;
+                    break;
+                }
+            }
+        } else {
+            for (ObjectTypeSpec type : spec.objectTypes()) {
+                if (!type.id().equals(typeId)) {
+                    continue;
+                }
+                for (VariableSpec candidate : type.variables()) {
+                    if (candidate.name().equals(variable)) {
+                        declared = candidate;
+                        break;
+                    }
+                }
+            }
+        }
+        // An undeclared variable has no range to honour; rules are free to invent scratch values.
+        return declared == null ? value : Math.clamp(value, declared.min(), declared.max());
+    }
+
     /** {@link EffectContext} for one event application. */
     private final class EventEffectContext implements EffectContext {
 
@@ -405,6 +443,11 @@ public final class Engine {
             this.eventId = eventId;
             this.rng = rng;
             this.cascade = cascade;
+        }
+
+        @Override
+        public double clampToDeclaredRange(String typeId, String variable, double value) {
+            return Engine.this.clampToDeclaredRange(typeId, variable, value);
         }
 
         @Override

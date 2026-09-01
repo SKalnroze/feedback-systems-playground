@@ -12,14 +12,20 @@ public final class RunRecords {
     /**
      * @param parentRunId    set when this run was forked from another run's checkpoint
      * @param forkedFromTick the tick the fork started at
+     * @param systemName     the name of the system this run executes, carried on the row itself
+     * @param description    what this run was for, written by whoever started it
+     *
+     * <p>Joined in rather than read from the version's spec: listing runs otherwise meant parsing a
+     * whole system specification per row just to recover its name.
      */
     public record Run(UUID id, UUID systemVersionId, String name, long seed, RunStatus status, long currentTick,
             double speedTicksPerSecond, UUID parentRunId, Long forkedFromTick, String errorMessage, Instant createdAt,
-            Instant updatedAt) {
+            Instant updatedAt, String systemName, String description) {
     }
 
     /** @param stateBytes compressed size, shown in the UI so long runs' storage cost is visible */
-    public record Checkpoint(UUID id, UUID runId, long tick, String label, int stateBytes, boolean automatic,
+    public record Checkpoint(UUID id, UUID runId, long tick, String label, String description, int stateBytes,
+            boolean automatic,
             Instant createdAt) {
     }
 

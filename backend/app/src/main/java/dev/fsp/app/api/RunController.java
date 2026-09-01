@@ -30,6 +30,7 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
@@ -54,9 +55,11 @@ public class RunController {
         this.broadcaster = broadcaster;
     }
 
+    /** Newest first. Paged, since a long-lived instance accumulates far more runs than fit a page. */
     @GetMapping
-    public List<RunSummaryView> list() {
-        return runs.findAll().stream().map(this::toSummary).toList();
+    public List<RunSummaryView> list(@RequestParam(defaultValue = "100") int limit,
+            @RequestParam(defaultValue = "0") int offset) {
+        return runs.findAll(Math.clamp(limit, 1, 500), Math.max(0, offset)).stream().map(this::toSummary).toList();
     }
 
     @GetMapping("/{id}")
@@ -79,7 +82,8 @@ public class RunController {
     public RunSummaryView create(@Valid @RequestBody CreateRunRequest request) {
         UUID versionId = UUID.fromString(request.systemVersionId());
         return toSummary(
-                runs.create(versionId, request.name(), request.parsedSeed(), request.speed(), request.autoStart()));
+                runs.create(versionId, request.name(), request.description(), request.parsedSeed(), request.speed(),
+                        request.autoStart()));
     }
 
     /**
@@ -107,6 +111,25 @@ public class RunController {
     public RunSummaryView speed(@PathVariable UUID id, @RequestBody SpeedRequest request) {
         runs.control(id, new RunCommand.SetSpeed(request.ticksPerSecond()));
         return toSummary(runs.find(id).orElseThrow(() -> new NotFoundException("run", id)));
+    }
+
+    /**
+     * What this run was for.
+     *
+     * <p>Separate from the name because they answer different questions. After a dozen forks the
+     * list is a column of near-identical names, and the thing that tells them apart - the question
+     * each was started to settle - has nowhere else to live.
+     */
+    @PatchMapping("/{id}/description")
+    public RunSummaryView describe(@PathVariable UUID id, @RequestBody ApiDtos.DescribeRequest request) {
+        runs.describe(id, request.description());
+        return toSummary(runs.find(id).orElseThrow(() -> new NotFoundException("run", id)));
+    }
+
+    @PatchMapping("/checkpoints/{checkpointId}/description")
+    public void describeCheckpoint(@PathVariable UUID checkpointId,
+            @RequestBody ApiDtos.DescribeRequest request) {
+        runs.describeCheckpoint(checkpointId, request.description());
     }
 
     @PatchMapping("/{id}/name")
@@ -148,19 +171,12 @@ public class RunController {
     }
 
     private RunSummaryView toSummary(Run run) {
-        String systemName = systems.findVersion(run.systemVersionId()).map(version -> version.spec().name())
-                .orElse("(unknown system)");
-        // Prefer the live tick: the stored one lags by up to one flush interval.
-        long tick = runs.liveSnapshot(run.id()).map(RunSnapshot::tick).orElse(run.currentTick());
-        var status = runs.liveSnapshot(run.id()).map(RunSnapshot::status).orElse(run.status());
-        return new RunSummaryView(run.id().toString(), run.name(), status.name(), tick, run.speedTicksPerSecond(),
-                Long.toString(run.seed()), systemName,
-                run.parentRunId() == null ? null : run.parentRunId().toString(),
-                run.forkedFromTick(), broadcaster.subscriberCount(run.id()), run.errorMessage());
+        return RunViews.toSummary(run, runs.liveSnapshot(run.id()), broadcaster.subscriberCount(run.id()));
     }
 
     private static CheckpointView toCheckpointView(Checkpoint checkpoint) {
         return new CheckpointView(checkpoint.id().toString(), checkpoint.tick(), checkpoint.label(),
+                checkpoint.description() == null ? "" : checkpoint.description(),
                 checkpoint.stateBytes(), checkpoint.automatic(), checkpoint.createdAt().toString());
     }
 }

@@ -16,14 +16,33 @@ public final class ObjectState {
 
     private final String id;
     private final String typeId;
+    /** The authored object this was materialised from; equal to the id for a single object. */
+    private final String groupId;
+    /** Position within that group, zero for a single object. Fixes pairing order for couplings. */
+    private final int memberIndex;
     private final Map<String, Double> variables = new LinkedHashMap<>();
     private final Map<String, Double> features = new LinkedHashMap<>();
     private final Set<String> tags = new LinkedHashSet<>();
     private boolean active = true;
 
     public ObjectState(String id, String typeId) {
+        this(id, typeId, id, 0);
+    }
+
+    public ObjectState(String id, String typeId, String groupId, int memberIndex) {
         this.id = java.util.Objects.requireNonNull(id, "id");
         this.typeId = java.util.Objects.requireNonNull(typeId, "typeId");
+        this.groupId = groupId == null ? id : groupId;
+        this.memberIndex = Math.max(0, memberIndex);
+    }
+
+    /** The authored object this came from; for a single object, its own id. */
+    public String groupId() {
+        return groupId;
+    }
+
+    public int memberIndex() {
+        return memberIndex;
     }
 
     public String id() {

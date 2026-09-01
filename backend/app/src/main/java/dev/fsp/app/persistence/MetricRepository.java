@@ -90,65 +90,8 @@ public class MetricRepository {
      * @param resolution requested ticks per point, or 0 to let the range decide
      */
     public Series fetchSeries(UUID runId, String seriesKey, long fromTick, long toTick, int resolution) {
-        return fetchSeries(runId, seriesKey, fromTick, toTick, resolution, 0);
-    }
-
-    /**
-     * @param rollupBucketTicks the bucket size rollups were built at, or 0 if there are none; a
-     *                          request at exactly that size is served from them instead of from raw
-     *                          rows, which is what keeps a chart of a million-tick run responsive
-     */
-    public Series fetchSeries(UUID runId, String seriesKey, long fromTick, long toTick, int resolution,
-            int rollupBucketTicks) {
-        long span = Math.max(1, toTick - fromTick);
-        int bucketSize = resolution > 0 ? resolution : (int) Math.max(1, span / MAX_POINTS_PER_SERIES);
-
-        if (rollupBucketTicks > 1 && bucketSize == rollupBucketTicks) {
-            List<Point> rolled = fetchFromRollups(runId, seriesKey, fromTick, toTick, rollupBucketTicks);
-            if (!rolled.isEmpty()) {
-                return new Series(seriesKey, rolled, rollupBucketTicks, true);
-            }
-        }
-
-        if (bucketSize <= 1) {
-            List<Point> points = jdbc.sql("""
-                    SELECT s.tick, s.value
-                    FROM metric_sample s JOIN metric_series d ON d.id = s.series_id
-                    WHERE s.run_id = :runId AND d.series_key = :key AND s.tick BETWEEN :from AND :to
-                    ORDER BY s.tick
-                    """).param("runId", runId).param("key", seriesKey).param("from", fromTick).param("to", toTick)
-                    .query((ResultSet rs, int rowNum) -> new Point(rs.getLong("tick"), rs.getDouble("value"))).list();
-            return new Series(seriesKey, points, 1, false);
-        }
-
-        // Bucketing in SQL rather than in Java: the point of downsampling is to avoid moving the
-        // raw rows across the wire at all.
-        List<Point> points = jdbc.sql("""
-                SELECT (s.tick / :bucket) * :bucket AS bucket_tick, avg(s.value) AS value
-                FROM metric_sample s JOIN metric_series d ON d.id = s.series_id
-                WHERE s.run_id = :runId AND d.series_key = :key AND s.tick BETWEEN :from AND :to
-                GROUP BY bucket_tick
-                ORDER BY bucket_tick
-                """).param("runId", runId).param("key", seriesKey).param("from", fromTick).param("to", toTick)
-                .param("bucket", (long) bucketSize)
-                .query((ResultSet rs, int rowNum) -> new Point(rs.getLong("bucket_tick"), rs.getDouble("value")))
-                .list();
-        return new Series(seriesKey, points, bucketSize, true);
-    }
-
-    private List<Point> fetchFromRollups(UUID runId, String seriesKey, long fromTick, long toTick,
-            int bucketSize) {
-        return jdbc.sql("""
-                SELECT r.bucket_tick, r.avg_value
-                FROM metric_rollup r JOIN metric_series d ON d.id = r.series_id
-                WHERE r.run_id = :runId AND d.series_key = :key AND r.bucket_size = :bucket
-                  AND r.bucket_tick BETWEEN :from AND :to
-                ORDER BY r.bucket_tick
-                """).param("runId", runId).param("key", seriesKey).param("bucket", bucketSize)
-                .param("from", fromTick).param("to", toTick)
-                .query((ResultSet rs, int rowNum) -> new Point(rs.getLong("bucket_tick"),
-                        rs.getDouble("avg_value")))
-                .list();
+        return fetchSeries(runId, List.of(seriesKey), fromTick, toTick, resolution, 0)
+                .getOrDefault(seriesKey, new Series(seriesKey, List.of(), 1, false));
     }
 
     /** Fetches several series at once, which is what a multi-series chart panel actually needs. */
@@ -157,13 +100,132 @@ public class MetricRepository {
         return fetchSeries(runId, seriesKeys, fromTick, toTick, resolution, 0);
     }
 
+    /**
+     * Fetches several series in one query.
+     *
+     * <p>One statement for the whole panel rather than one per series: a panel showing eight
+     * variables was previously eight round trips to Postgres, all of them scanning the same rows of
+     * the same partition.
+     *
+     * @param rollupBucketTicks the bucket size rollups were built at, or 0 if there are none. Any
+     *                          request whose bucket is a whole multiple of it can be answered from
+     *                          rollups by aggregating them further, which is what keeps a chart of
+     *                          a million-tick run responsive.
+     */
     public Map<String, Series> fetchSeries(UUID runId, List<String> seriesKeys, long fromTick, long toTick,
             int resolution, int rollupBucketTicks) {
         Map<String, Series> result = new LinkedHashMap<>();
+        if (seriesKeys.isEmpty()) {
+            return result;
+        }
+        long span = Math.max(1, toTick - fromTick);
+        int bucketSize = chooseBucket(resolution, span, rollupBucketTicks);
+
+        Map<String, List<Point>> points;
+        boolean bucketed;
+        if (rollupBucketTicks > 1 && bucketSize >= rollupBucketTicks && bucketSize % rollupBucketTicks == 0) {
+            points = fetchFromRollups(runId, seriesKeys, fromTick, toTick, rollupBucketTicks, bucketSize);
+            bucketed = true;
+            if (points.isEmpty()) {
+                // Rollups had not been built for this range yet; fall back rather than draw nothing.
+                points = fetchRaw(runId, seriesKeys, fromTick, toTick, bucketSize);
+                bucketed = bucketSize > 1;
+            }
+        } else {
+            points = fetchRaw(runId, seriesKeys, fromTick, toTick, bucketSize);
+            bucketed = bucketSize > 1;
+        }
+
         for (String key : seriesKeys) {
-            result.put(key, fetchSeries(runId, key, fromTick, toTick, resolution, rollupBucketTicks));
+            result.put(key, new Series(key, points.getOrDefault(key, List.of()), bucketSize, bucketed));
         }
         return result;
+    }
+
+    /**
+     * Picks ticks-per-point for a range.
+     *
+     * <p>An automatically chosen bucket is snapped up to a multiple of the rollup grid. A bucket of
+     * 43 against a grid of 50 would be honest but would force a scan of the raw rows; 50 answers
+     * the same question from the pre-aggregated ones.
+     */
+    private static int chooseBucket(int resolution, long span, int rollupBucketTicks) {
+        if (resolution > 0) {
+            return resolution;
+        }
+        int natural = (int) Math.max(1, span / MAX_POINTS_PER_SERIES);
+        if (rollupBucketTicks > 1 && natural > 1) {
+            int multiples = Math.max(1, (natural + rollupBucketTicks - 1) / rollupBucketTicks);
+            return multiples * rollupBucketTicks;
+        }
+        return natural;
+    }
+
+    private Map<String, List<Point>> fetchRaw(UUID runId, List<String> seriesKeys, long fromTick, long toTick,
+            int bucketSize) {
+        String sql = bucketSize <= 1 ? """
+                SELECT d.series_key, s.tick AS bucket_tick, s.value
+                FROM metric_sample s JOIN metric_series d ON d.id = s.series_id
+                WHERE s.run_id = :runId AND d.series_key IN (:keys) AND s.tick BETWEEN :from AND :to
+                ORDER BY d.series_key, bucket_tick
+                """ : """
+                SELECT series_key, bucket_tick, avg(value) AS value
+                FROM (
+                    SELECT d.series_key, (s.tick / :bucket) * :bucket AS bucket_tick, s.value
+                    FROM metric_sample s JOIN metric_series d ON d.id = s.series_id
+                    WHERE s.run_id = :runId AND d.series_key IN (:keys) AND s.tick BETWEEN :from AND :to
+                ) bucketed
+                GROUP BY series_key, bucket_tick
+                ORDER BY series_key, bucket_tick
+                """;
+        var spec = jdbc.sql(sql).param("runId", runId).param("keys", seriesKeys).param("from", fromTick)
+                .param("to", toTick);
+        if (bucketSize > 1) {
+            spec = spec.param("bucket", (long) bucketSize);
+        }
+        return groupByKey(spec.query((ResultSet rs, int rowNum) -> new KeyedPoint(rs.getString("series_key"),
+                rs.getLong("bucket_tick"), rs.getDouble("value"))).list());
+    }
+
+    /**
+     * Reads pre-aggregated buckets, re-aggregating when the request wants a coarser grid.
+     *
+     * <p>The re-aggregation weights each bucket by how many samples went into it, so a coarse point
+     * is the mean of the underlying samples rather than a mean of means - those differ whenever a
+     * bucket is short, which the last bucket of a run usually is.
+     */
+    private Map<String, List<Point>> fetchFromRollups(UUID runId, List<String> seriesKeys, long fromTick,
+            long toTick, int rollupBucketTicks, int requestedBucket) {
+        List<KeyedPoint> rows = jdbc.sql("""
+                SELECT series_key, bucket_tick,
+                       sum(avg_value * sample_count) / nullif(sum(sample_count), 0) AS value
+                FROM (
+                    SELECT d.series_key, (r.bucket_tick / :requested) * :requested AS bucket_tick,
+                           r.avg_value, r.sample_count
+                    FROM metric_rollup r JOIN metric_series d ON d.id = r.series_id
+                    WHERE r.run_id = :runId AND d.series_key IN (:keys) AND r.bucket_size = :bucket
+                      AND r.bucket_tick BETWEEN :from AND :to
+                ) regrouped
+                GROUP BY series_key, bucket_tick
+                ORDER BY series_key, bucket_tick
+                """).param("runId", runId).param("keys", seriesKeys).param("bucket", rollupBucketTicks)
+                .param("requested", (long) requestedBucket).param("from", fromTick).param("to", toTick)
+                .query((ResultSet rs, int rowNum) -> new KeyedPoint(rs.getString("series_key"),
+                        rs.getLong("bucket_tick"), rs.getDouble("value")))
+                .list();
+        return groupByKey(rows);
+    }
+
+    private static Map<String, List<Point>> groupByKey(List<KeyedPoint> rows) {
+        Map<String, List<Point>> byKey = new LinkedHashMap<>();
+        for (KeyedPoint row : rows) {
+            byKey.computeIfAbsent(row.seriesKey(), key -> new ArrayList<>())
+                    .add(new Point(row.tick(), row.value()));
+        }
+        return byKey;
+    }
+
+    private record KeyedPoint(String seriesKey, long tick, double value) {
     }
 
     /** Highest tick with a stored sample, used to bound a chart's default range. */
@@ -200,6 +262,35 @@ public class MetricRepository {
                     max_value = EXCLUDED.max_value, sample_count = EXCLUDED.sample_count
                 """).param("runId", runId).param("bucket", (long) bucketSize).param("from", fromTick)
                 .param("to", toTick).update();
+    }
+
+    /**
+     * Drops everything recorded after a tick.
+     *
+     * <p>Used when a run is rewound in place. The samples after the restore point describe a future
+     * the run no longer has, and leaving them would draw a chart that contradicts the run's own
+     * state - the tick counter says 200 while the line runs to 600.
+     */
+    public void deleteSamplesAfter(UUID runId, long tick) {
+        jdbc.sql("DELETE FROM metric_sample WHERE run_id = :runId AND tick > :tick").param("runId", runId)
+                .param("tick", tick).update();
+        jdbc.sql("DELETE FROM metric_rollup WHERE run_id = :runId AND bucket_tick >= :tick").param("runId", runId)
+                .param("tick", tick).update();
+    }
+
+    /**
+     * Compacts a run's raw samples into rollups, keeping only recent detail.
+     *
+     * <p>Samples are the bulk of the database and a long run's early history is never read at full
+     * resolution. Rolling it up and deleting the raw rows keeps the storage cost of a run bounded
+     * by how long it ran rather than by how long it is kept.
+     *
+     * @return the number of raw sample rows removed
+     */
+    public int compactBefore(UUID runId, long tick, int bucketSize) {
+        buildRollups(runId, bucketSize, 0, tick - 1);
+        return jdbc.sql("DELETE FROM metric_sample WHERE run_id = :runId AND tick < :tick").param("runId", runId)
+                .param("tick", tick).update();
     }
 
     public void deleteSamples(UUID runId) {

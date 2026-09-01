@@ -36,7 +36,7 @@ public final class ApiDtos {
      * @param speed     ticks per second; null means the default, zero or less means unthrottled
      * @param autoStart start immediately rather than waiting for a play command
      */
-    public record CreateRunRequest(String systemVersionId, String name, String seed, Double speed,
+    public record CreateRunRequest(String systemVersionId, String name, String description, String seed, Double speed,
             boolean autoStart) {
 
         /** @throws IllegalArgumentException if the seed was supplied but is not a 64-bit integer */
@@ -103,6 +103,7 @@ public final class ApiDtos {
             int memoryCount) {
     }
 
+    /** Editing what something was for. Blank is allowed: clearing a description is a real intent. */
     /**
      * @param seed the run's master seed, as a string
      *
@@ -111,7 +112,11 @@ public final class ApiDtos {
      * used - and reproducing a run from the displayed value would produce a different simulation.
      * As a string it survives the trip intact.
      */
-    public record RunSummaryView(String id, String name, String status, long tick, double speed, String seed,
+    public record DescribeRequest(String description) {
+    }
+
+    public record RunSummaryView(String id, String name, String description, String status, long tick, double speed,
+            String seed,
             String systemName, String parentRunId, Long forkedFromTick, int watchers, String error) {
     }
 
@@ -120,7 +125,8 @@ public final class ApiDtos {
             long ticksPerSecondActual, Map<String, Double> latestValues) {
     }
 
-    public record CheckpointView(String id, long tick, String label, int stateBytes, boolean automatic,
+    public record CheckpointView(String id, long tick, String label, String description, int stateBytes,
+            boolean automatic,
             String createdAt) {
     }
 

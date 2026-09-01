@@ -35,8 +35,20 @@ export function ObjectNode({ data, selected }: NodeProps) {
       )}
     >
       <div className="border-b border-[var(--border)] px-3 py-1.5">
-        <div className="text-xs font-semibold">{object.label}</div>
-        <div className="text-[10px] text-[var(--text-muted)]">{object.typeId}</div>
+        <div className="flex items-center gap-1.5">
+          <div className="min-w-0 flex-1 truncate text-xs font-semibold">{object.label}</div>
+          {/* A population is one node carrying its size. Drawing two thousand nodes would be
+              accurate and unreadable, which is not a trade worth making. */}
+          {object.count > 1 ? (
+            <Badge tone="accent" title={`${object.count.toLocaleString()} instances`}>
+              ×{object.count.toLocaleString()}
+            </Badge>
+          ) : null}
+        </div>
+        <div className="text-[10px] text-[var(--text-muted)]">
+          {object.typeId}
+          {object.count > 1 ? " · each with its own memories" : ""}
+        </div>
         {object.tags.length > 0 ? (
           <div className="mt-1 flex flex-wrap gap-1">
             {object.tags.map((tag) => (

@@ -25,8 +25,8 @@ public class SystemService {
         this.modules = modules;
     }
 
-    public List<SystemDefinition> findAll() {
-        return systems.findAll();
+    public List<SystemDefinition> findAll(int limit, int offset) {
+        return systems.findAll(limit, offset);
     }
 
     public Optional<SystemDefinition> find(UUID id) {

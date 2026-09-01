@@ -34,11 +34,12 @@ public class SystemRepository {
         return id;
     }
 
-    public List<SystemDefinition> findAll() {
+    /** Most recently edited first, paged for the same reason runs are. */
+    public List<SystemDefinition> findAll(int limit, int offset) {
         return jdbc.sql("""
                 SELECT id, name, description, draft_spec, created_at, updated_at
-                FROM system_definition ORDER BY updated_at DESC
-                """).query(this::mapDefinition).list();
+                FROM system_definition ORDER BY updated_at DESC LIMIT :limit OFFSET :offset
+                """).param("limit", limit).param("offset", offset).query(this::mapDefinition).list();
     }
 
     public Optional<SystemDefinition> find(UUID id) {

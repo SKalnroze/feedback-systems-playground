@@ -27,6 +27,83 @@ public class AuthoringSteps {
         createdSystemId = world.ensureSystem();
     }
 
+    /**
+     * Posts a draft in the shape the editor produced before object counts and group sampling
+     * existed: no `count` on an object, no `sampleGroupMembers` in settings.
+     */
+    @When("a system is created from a draft written before groups existed")
+    public void aSystemFromAnOlderDraft() {
+        java.util.Map<String, Object> variable = new java.util.LinkedHashMap<>();
+        variable.put("name", "trust");
+        variable.put("label", "trust");
+        variable.put("kind", "STOCK");
+        variable.put("initial", 0.5);
+        variable.put("min", 0.0);
+        variable.put("max", 1.0);
+
+        java.util.Map<String, Object> memory = new java.util.LinkedHashMap<>();
+        memory.put("defaultDecay", java.util.Map.of("kind", "exponential", "halfLife", 40.0,
+                "common", java.util.Map.of("floor", 0.0, "interference", 0.0)));
+        memory.put("retrievalThreshold", 0.05);
+        memory.put("capacity", 0);
+        memory.put("pruneForgotten", false);
+        memory.put("similarityThreshold", 0.6);
+
+        java.util.Map<String, Object> type = new java.util.LinkedHashMap<>();
+        type.put("id", "person");
+        type.put("label", "person");
+        type.put("variables", java.util.List.of(variable));
+        type.put("memory", memory);
+        type.put("defaultTags", java.util.List.of());
+        type.put("defaultFeatures", java.util.Map.of());
+
+        java.util.Map<String, Object> object = new java.util.LinkedHashMap<>();
+        object.put("id", "ana");
+        object.put("typeId", "person");
+        object.put("label", "ana");
+        object.put("variables", java.util.Map.of());
+        object.put("tags", java.util.List.of());
+        object.put("features", java.util.Map.of());
+        // Deliberately no "count".
+
+        java.util.Map<String, Object> settings = new java.util.LinkedHashMap<>();
+        settings.put("metricSampleInterval", 1);
+        settings.put("autoCheckpointInterval", 250);
+        settings.put("maxTicks", 0);
+        settings.put("interactionsPerTick", 1);
+        settings.put("sampleMemoryStrength", false);
+        // Deliberately no "sampleGroupMembers".
+
+        java.util.Map<String, Object> draft = new java.util.LinkedHashMap<>();
+        draft.put("id", "legacy");
+        draft.put("name", "legacy");
+        draft.put("description", "");
+        draft.put("moduleIds", java.util.List.of());
+        draft.put("objectTypes", java.util.List.of(type));
+        draft.put("objects", java.util.List.of(object));
+        draft.put("globalVariables", java.util.List.of());
+        draft.put("links", java.util.List.of());
+        draft.put("events", java.util.List.of());
+        draft.put("triggers", java.util.List.of());
+        draft.put("interactions", java.util.List.of());
+        draft.put("settings", settings);
+
+        java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("name", "legacy");
+        body.put("description", "");
+        body.put("draft", draft);
+        createdSystemId = world.post("/api/v1/systems", body).get("id").asString();
+
+    }
+
+    @Then("that system reports one instance per object")
+    public void thatSystemReportsOneInstancePerObject() {
+        var objects = world.get("/api/v1/systems/" + createdSystemId).get("draft").get("objects");
+        assertThat(objects.get(0).get("count").asInt())
+                .as("an object stored without a count stands for exactly one instance")
+                .isEqualTo(1);
+    }
+
     @Given("the draft has a link from a variable that does not exist")
     public void draftHasDanglingLink() {
         world.addLink(LinkSpec.of("dangling", new VariableRef.Global("nowhere"),

@@ -14,7 +14,14 @@ public enum RngStream {
     INTERACTION_OUTCOME,
     OBSERVATION,
     MEMORY_NOISE,
-    MODULE_CUSTOM;
+    MODULE_CUSTOM,
+    /**
+     * Pairing members across a link whose coupling is random.
+     *
+     * <p>Appended rather than inserted: the stream id is the ordinal, so putting a new value
+     * anywhere else would renumber the others and change every existing run's numbers.
+     */
+    LINK_COUPLING;
 
     public int id() {
         return ordinal();

@@ -17,6 +17,15 @@ public class RunSteps {
     @Autowired
     private World world;
 
+    @Autowired
+    private dev.fsp.app.run.RunEngineHost host;
+
+    @Autowired
+    private dev.fsp.app.run.RunService runs;
+
+    @Autowired
+    private dev.fsp.app.persistence.MetricRepository metrics;
+
     private long pausedAtTick;
 
     @Given("a run is created")
@@ -110,6 +119,24 @@ public class RunSteps {
     public void theRunStaysPut() {
         nothingHappens();
         assertThat(world.tickOf(world.runId())).isEqualTo(pausedAtTick);
+    }
+
+    /** Drops the run from memory the way a restart or an eviction would. */
+    @When("the run is unloaded from memory")
+    public void theRunIsUnloadedFromMemory() {
+        host.evict(java.util.UUID.fromString(world.runId()));
+    }
+
+    @When("the run is opened again")
+    public void theRunIsOpenedAgain() {
+        runs.ensureHosted(java.util.UUID.fromString(world.runId()));
+    }
+
+    @Then("no samples are recorded after tick {long}")
+    public void noSamplesAreRecordedAfterTick(long tick) {
+        assertThat(metrics.latestSampledTick(java.util.UUID.fromString(world.runId())))
+                .as("latest sampled tick")
+                .isLessThanOrEqualTo(tick);
     }
 
     @Then("the run reports seed {long}")

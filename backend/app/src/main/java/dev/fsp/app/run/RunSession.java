@@ -173,6 +173,7 @@ public final class RunSession {
                 status = RunStatus.PAUSED;
                 runs.updateProgress(runId, state.tick(), RunStatus.PAUSED);
             }
+            writeResumeCheckpoint();
         }
     }
 
@@ -404,6 +405,29 @@ public final class RunSession {
         return new RunLogRepository.MemoryRow(memory.id(), memory.ownerId(), memory.subjectId(), memory.kind(),
                 memory.createdTick(), memory.originTick(), memory.initialStrength(), memory.strengthAt(tick),
                 memory.valence(), memory.salience(), memory.reactivationCount(), tick);
+    }
+
+    /**
+     * Writes a checkpoint on the way out, unless one already covers this tick.
+     *
+     * <p>A run is resumed from its newest checkpoint. Without this, unloading a run that had ticked
+     * past its last automatic checkpoint threw away everything since: reopening it silently rewound
+     * it to the older tick while its recorded samples still ran to where it had actually got to, so
+     * the run and its own history disagreed.
+     */
+    private void writeResumeCheckpoint() {
+        if (state.tick() <= 0) {
+            return;
+        }
+        try {
+            if (runs.findLatestCheckpoint(runId).filter(latest -> latest.tick() >= state.tick()).isPresent()) {
+                return;
+            }
+            writeCheckpoint("resume point", true);
+        } catch (RuntimeException e) {
+            // Losing this costs progress on the next load; failing to shut down costs the process.
+            log.warn("could not write a resume checkpoint for run {} at tick {}", runId, state.tick(), e);
+        }
     }
 
     /** Writes a checkpoint of the current state. */

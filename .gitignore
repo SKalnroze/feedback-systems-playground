@@ -17,3 +17,8 @@ frontend/test-results/
 # Local overrides
 .env
 .env.local
+
+# JVM crash dumps. Written wherever the JVM happened to be running, and worth reading when a build
+# dies unexpectedly - but they are diagnostics of one machine at one moment, not part of the project.
+hs_err_pid*.log
+replay_pid*.log

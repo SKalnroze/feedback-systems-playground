@@ -1,4 +1,6 @@
-import { useCheckpoint, useForks, useRun } from "@/api/queries";
+import { useCheckpoint, useForks, useRun,
+  useDescribeRun,
+} from "@/api/queries";
 import { useLiveSnapshot, useRunStream } from "@/api/liveRun";
 import { Badge, Button, Card, ErrorNote, Spinner } from "@/components/ui/primitives";
 import { ChartWorkspace, type ChartPanelConfig } from "@/features/runs/ChartWorkspace";
@@ -9,6 +11,7 @@ import {
   MemoryPanel,
   RelationshipPanel,
 } from "@/features/runs/InspectorPanels";
+import { EditableDescription } from "@/components/ui/EditableDescription";
 import { useTheme } from "@/lib/theme";
 import { cn, formatTick } from "@/lib/utils";
 import { Link, useParams } from "@tanstack/react-router";
@@ -27,6 +30,7 @@ export function RunDetailPage() {
   const { runId } = useParams({ from: "/runs/$runId" });
   const { theme } = useTheme();
   const run = useRun(runId);
+  const describe = useDescribeRun(runId);
   const forks = useForks(runId);
   const checkpoint = useCheckpoint(runId);
   const live = useLiveSnapshot(runId);
@@ -41,6 +45,16 @@ export function RunDetailPage() {
     () => (run.data?.spec?.objects ?? []).map((object) => object.id),
     [run.data?.spec],
   );
+
+  // Which type each object is, so the series picker can offer "every learner's motivation" rather
+  // than making the reader tick eight boxes that mean one thing.
+  const objectTypes = useMemo(() => {
+    const byObject = new Map<string, string>();
+    for (const object of run.data?.spec?.objects ?? []) {
+      byObject.set(object.id, object.typeId);
+    }
+    return byObject;
+  }, [run.data?.spec]);
 
   // A first panel is seeded from the spec so the page is useful the moment it opens, rather than
   // asking the user to configure a chart before seeing anything at all.
@@ -99,6 +113,14 @@ export function RunDetailPage() {
         ) : null}
       </div>
 
+      <div className="max-w-3xl px-4 pt-1">
+        <EditableDescription
+          value={summary.description}
+          placeholder="What is this run for? What should someone look at?"
+          onSave={(description) => describe.mutate(description)}
+        />
+      </div>
+
       <div className="mt-2">
         <ControlBar run={run.data} onCheckpoint={() => checkpoint.mutate(null)} />
       </div>
@@ -141,6 +163,7 @@ export function RunDetailPage() {
                 theme={theme}
                 live={isLive}
                 markers={markers}
+                objectTypes={objectTypes}
                 onTickClick={setCursorTick}
               />
             ) : null}

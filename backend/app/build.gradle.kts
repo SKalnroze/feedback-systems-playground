@@ -7,6 +7,7 @@ plugins {
 dependencies {
     implementation(project(":engine"))
     implementation(project(":modules:interpersonal"))
+    implementation(project(":modules:learning"))
 
     implementation(libs.spring.boot.starter.web)
     implementation(libs.spring.boot.starter.jdbc)

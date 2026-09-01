@@ -43,6 +43,10 @@ public final class InterpersonalModule implements SimulationModule {
 
     @Override
     public List<Preset> presets() {
-        return InterpersonalPresets.all();
+        // The small presets teach the engine person by person; the population ones show what
+        // only a crowd can do. Both are the same module's vocabulary.
+        return java.util.stream.Stream
+                .concat(InterpersonalPresets.all().stream(), PopulationPresets.all().stream())
+                .toList();
     }
 }

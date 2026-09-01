@@ -46,3 +46,23 @@ Feature: Runs can be driven from the outside
   Scenario: A seed too large for a browser number survives intact
     When a run is created with seed -3072724163409498002
     Then the run reports seed -3072724163409498002
+
+  # A run is resumed from its newest checkpoint. If unloading it did not record where it had
+  # actually got to, reopening it silently rewound it and left its samples describing ticks the
+  # run no longer claimed to have reached.
+  Scenario: Unloading and reopening a run keeps the tick it had reached
+    Given a run is created
+    When the run is stepped by 40 ticks
+    And the run is unloaded from memory
+    And the run is opened again
+    Then the run is at tick 40
+    And no samples are recorded after tick 40
+
+  # The damaged-run case: a run whose recorded tick was already moved back by an earlier resume
+  # still has samples describing ticks it no longer claims to have reached.
+  Scenario: Reopening a run leaves no samples beyond the tick it resumed at
+    Given a run is created
+    When the run is stepped by 30 ticks
+    And the run is unloaded from memory
+    And the run is opened again
+    Then no samples are recorded after tick 30

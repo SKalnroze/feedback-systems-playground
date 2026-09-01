@@ -1,4 +1,4 @@
-import type { DecayModel, LinkSpec, SystemSpec, Transfer } from "@/api/types";
+import type { Aggregate, CouplingMode, DecayModel, LinkSpec, SystemSpec, Transfer } from "@/api/types";
 import { Badge, Button, Field, Input, Select } from "@/components/ui/primitives";
 import {
   DECAY_DESCRIPTIONS,
@@ -6,7 +6,13 @@ import {
   decayCurvePoints,
   halfLifeOf,
 } from "@/features/systems/decayCurve";
-import { formatNumber } from "@/lib/utils";
+import {
+  COUPLING_LABEL,
+  COUPLING_MODES,
+  couplingIsInvalid,
+  explainCoupling,
+} from "@/features/systems/couplingText";
+import { cn, formatNumber } from "@/lib/utils";
 import { useMemo } from "react";
 
 /**
@@ -21,11 +27,17 @@ export function LinkInspector({
   link,
   onChange,
   onDelete,
+  memberCounts,
 }: {
   link: LinkSpec;
   onChange: (link: LinkSpec) => void;
   onDelete: () => void;
+  /** How many instances each authored object stands for, so coupling can be explained concretely. */
+  memberCounts?: Map<string, number>;
 }) {
+  const sourceMembers = membersBehind(link.source, memberCounts);
+  const targetMembers = membersBehind(link.target, memberCounts);
+  const grouped = sourceMembers > 1 || targetMembers > 1;
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -38,6 +50,71 @@ export function LinkInspector({
       <p className="text-xs text-[var(--text-muted)]">
         {describeRef(link.source)} <span aria-hidden>→</span> {describeRef(link.target)}
       </p>
+
+      {/* Only shown when it can matter. Between two single objects there is exactly one thing a
+          link can mean, and offering six ways to say it would be noise. */}
+      {grouped ? (
+        <div className="space-y-2 rounded border border-[var(--border)] p-2">
+          <Field label="How members connect">
+            <Select
+              className="w-full"
+              value={link.coupling.mode}
+              onChange={(event) =>
+                onChange({
+                  ...link,
+                  coupling: { ...link.coupling, mode: event.target.value as CouplingMode },
+                })
+              }
+            >
+              {COUPLING_MODES.map((mode) => (
+                <option key={mode} value={mode}>
+                  {COUPLING_LABEL[mode]}
+                </option>
+              ))}
+            </Select>
+          </Field>
+
+          {link.coupling.mode === "MANY_TO_ONE" ||
+          link.coupling.mode === "MANY_TO_MANY_AGGREGATE" ||
+          link.coupling.mode === "AUTO" ? (
+            <Field label="Combined by">
+              <Select
+                className="w-full"
+                value={link.coupling.aggregate}
+                onChange={(event) =>
+                  onChange({
+                    ...link,
+                    coupling: { ...link.coupling, aggregate: event.target.value as Aggregate },
+                  })
+                }
+              >
+                {(["MEAN", "SUM", "MIN", "MAX", "SPREAD", "VARIANCE"] as Aggregate[]).map((option) => (
+                  <option key={option} value={option}>
+                    {option.toLowerCase()}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          ) : null}
+
+          <p
+            className={cn(
+              "text-xs",
+              couplingIsInvalid(link.coupling, sourceMembers, targetMembers)
+                ? "text-[var(--status-critical)]"
+                : "text-[var(--text-muted)]",
+            )}
+          >
+            {explainCoupling(
+              link.coupling,
+              sourceMembers,
+              targetMembers,
+              describeRef(link.source),
+              describeRef(link.target),
+            )}
+          </p>
+        </div>
+      ) : null}
 
       <Field
         label="Gain"
@@ -492,6 +569,14 @@ export function LoopSummary({ report }: { report: { polarity: string; totalDelay
       </p>
     </div>
   );
+}
+
+/** Members behind an endpoint: a group's count, or one for anything that is not a group. */
+function membersBehind(
+  ref: SystemSpec["links"][number]["source"],
+  counts: Map<string, number> | undefined,
+): number {
+  return ref.kind === "object" ? (counts?.get(ref.objectId) ?? 1) : 1;
 }
 
 function describeRef(ref: SystemSpec["links"][number]["source"]): string {

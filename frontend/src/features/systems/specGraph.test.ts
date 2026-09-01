@@ -33,8 +33,8 @@ function spec(): SystemSpec {
       },
     ],
     objects: [
-      { id: "ana", typeId: "person", label: "ana", variables: { trust: 0.8 }, tags: ["lead"], features: {} },
-      { id: "ben", typeId: "person", label: "ben", variables: {}, tags: [], features: {} },
+      { id: "ana", typeId: "person", label: "ana", variables: { trust: 0.8 }, tags: ["lead"], features: {}, count: 1 },
+      { id: "ben", typeId: "person", label: "ben", variables: {}, tags: [], features: {}, count: 1 },
     ],
     globalVariables: [
       { name: "tension", label: "tension", kind: "AUXILIARY", initial: 0, min: 0, max: 1 },
@@ -49,6 +49,7 @@ function spec(): SystemSpec {
         delayTicks: 3,
         transfer: { kind: "transfer-linear" },
         usesRate: false,
+      coupling: { mode: "AUTO", aggregate: "MEAN" },
       },
     ],
   };

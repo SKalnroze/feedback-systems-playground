@@ -1,5 +1,7 @@
 import { AppShell } from "@/components/AppShell";
 import { RunDetailPage } from "@/features/runs/RunDetailPage";
+import { ComparePage } from "@/features/runs/ComparePage";
+import { ObjectsPage } from "@/features/objects/ObjectsPage";
 import { RunsPage } from "@/features/runs/RunsPage";
 import { SystemEditorPage } from "@/features/systems/SystemEditorPage";
 import { SystemsPage } from "@/features/systems/SystemsPage";
@@ -36,6 +38,18 @@ const runsRoute = createRoute({
   component: RunsPage,
 });
 
+const objectsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/objects",
+  component: ObjectsPage,
+});
+
+const compareRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/compare",
+  component: ComparePage,
+});
+
 const runDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/runs/$runId",
@@ -48,6 +62,8 @@ const routeTree = rootRoute.addChildren([
   systemEditorRoute,
   runsRoute,
   runDetailRoute,
+  compareRoute,
+  objectsRoute,
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: "intent" });

@@ -105,6 +105,9 @@ export type ObjectTypeSpec = {
   memory: MemorySettings;
   defaultTags: string[];
   defaultFeatures: Record<string, number>;
+  /** Set when the type was copied out of a shared template, so it can be spotted going stale. */
+  templateId?: string | null;
+  templateVersion?: number | null;
 };
 
 export type ObjectSpec = {
@@ -114,7 +117,23 @@ export type ObjectSpec = {
   variables: Record<string, number>;
   tags: string[];
   features: Record<string, number>;
+  /** How many instances this stands for. One is an ordinary object; more is a population. */
+  count: number;
 };
+
+export type CouplingMode =
+  | "AUTO"
+  | "ONE_TO_ONE"
+  | "ONE_TO_MANY"
+  | "MANY_TO_ONE"
+  | "MANY_TO_MANY_AGGREGATE"
+  | "MANY_TO_MANY_RANDOM"
+  | "MANY_TO_MANY_ALL";
+
+export type Aggregate = "MEAN" | "SUM" | "MIN" | "MAX" | "VARIANCE" | "SPREAD";
+
+/** How a link connects members when either end stands for more than one object. */
+export type Coupling = { mode: CouplingMode; aggregate: Aggregate };
 
 export type LinkSpec = {
   id: string;
@@ -125,6 +144,7 @@ export type LinkSpec = {
   delayTicks: number;
   transfer: Transfer;
   usesRate: boolean;
+  coupling: Coupling;
 };
 
 export type EventSpec = {
@@ -171,6 +191,8 @@ export type SimulationSettings = {
   maxTicks: number;
   interactionsPerTick: number;
   sampleMemoryStrength: boolean;
+  /** How many members of each group to record individually; groups are otherwise aggregated. */
+  sampleGroupMembers: number;
 };
 
 export type SystemSpec = {
@@ -269,6 +291,8 @@ export type RunStatus = "CREATED" | "RUNNING" | "PAUSED" | "STOPPED" | "COMPLETE
 export type RunSummary = {
   id: string;
   name: string;
+  /** What this run was for; the question it was started to answer. */
+  description: string;
   status: RunStatus;
   tick: number;
   speed: number;
@@ -294,6 +318,8 @@ export type Checkpoint = {
   id: string;
   tick: number;
   label: string | null;
+  /** Why this tick was worth keeping. */
+  description: string;
   stateBytes: number;
   automatic: boolean;
   createdAt: string;
@@ -359,4 +385,55 @@ export type RunSnapshot = {
   memoryCount: number;
   latestValues: Record<string, number>;
   ticksPerSecondActual: number;
+};
+
+// --- experiments and diffs ------------------------------------------------------------------------
+
+/** One tick of an aggregated sweep: where the replicates sat, and how far apart they were. */
+export type ExperimentBand = {
+  tick: number;
+  mean: number;
+  min: number;
+  max: number;
+  stdDev: number;
+  samples: number;
+};
+
+export type ExperimentComparison = {
+  seriesKey: string;
+  resolution: number;
+  bands: ExperimentBand[];
+  runIds: string[];
+};
+
+export type ExperimentView = { name: string; runs: RunSummary[] };
+
+export type SpecChange = {
+  kind: string;
+  id: string;
+  change: "added" | "removed" | "changed";
+  before: string | null;
+  after: string | null;
+};
+
+export type SpecDiffReport = { changes: SpecChange[]; identical: boolean };
+
+// --- object templates -----------------------------------------------------------------------------
+
+export type ObjectTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  draft: ObjectTypeSpec | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ObjectTemplateVersion = {
+  id: string;
+  templateId: string;
+  version: number;
+  typeSpec: ObjectTypeSpec;
+  checksum: string;
+  publishedAt: string;
 };

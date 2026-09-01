@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
@@ -33,8 +34,22 @@ public class SystemController {
     }
 
     @GetMapping
-    public List<SystemDefinition> list() {
-        return systems.findAll();
+    public List<SystemDefinition> list(@RequestParam(defaultValue = "100") int limit,
+            @RequestParam(defaultValue = "0") int offset) {
+        return systems.findAll(Math.clamp(limit, 1, 500), Math.max(0, offset));
+    }
+
+    /**
+     * What changed between two published versions.
+     *
+     * <p>Runs pin to a version, so this is how "why did these two runs behave differently" gets an
+     * answer that is not guesswork.
+     */
+    @GetMapping("/{id}/versions/{from}/diff/{to}")
+    public SpecDiff.Report diff(@PathVariable UUID id, @PathVariable UUID from, @PathVariable UUID to) {
+        var before = systems.version(from).orElseThrow(() -> new NotFoundException("version", from));
+        var after = systems.version(to).orElseThrow(() -> new NotFoundException("version", to));
+        return SpecDiff.between(before.spec(), after.spec());
     }
 
     @GetMapping("/{id}")

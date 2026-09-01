@@ -50,8 +50,12 @@ public class RunService {
         this.modules = modules;
     }
 
-    public List<Run> findAll() {
-        return runs.findAll();
+    public List<Run> findAll(int limit, int offset) {
+        return runs.findAll(limit, offset);
+    }
+
+    public long countAll() {
+        return runs.countAll();
     }
 
     public Optional<Run> find(UUID runId) {
@@ -64,6 +68,11 @@ public class RunService {
 
     /** Creates a run against a published system version, optionally starting it straight away. */
     public Run create(UUID systemVersionId, String name, Long seed, Double speed, boolean autoStart) {
+        return create(systemVersionId, name, "", seed, speed, autoStart);
+    }
+
+    public Run create(UUID systemVersionId, String name, String description, Long seed, Double speed,
+            boolean autoStart) {
         SystemVersion version = requireVersion(systemVersionId);
         List<SystemSpec.ValidationIssue> issues = version.spec().validate().stream()
                 .filter(SystemSpec.ValidationIssue::isError).toList();
@@ -74,7 +83,7 @@ public class RunService {
         long effectiveSeed = seed == null ? java.util.concurrent.ThreadLocalRandom.current().nextLong() : seed;
         double effectiveSpeed = speed == null ? 10.0 : speed;
         UUID runId = runs.create(systemVersionId, name == null || name.isBlank() ? version.spec().name() : name,
-                effectiveSeed, effectiveSpeed, null, null, 0L);
+                description, effectiveSeed, effectiveSpeed, null, null, 0L);
 
         Engine engine = newEngine(version.spec());
         SimulationState state = engine.createInitialState(effectiveSeed);
@@ -147,10 +156,22 @@ public class RunService {
 
         host.evict(source.id());
         host.host(source.id(), engine, state, RunStatus.PAUSED, source.speedTicksPerSecond());
+        // Everything after the restore point belongs to a future this run no longer has. Keeping it
+        // would leave the chart drawing past the tick the run is actually at.
+        metrics.deleteSamplesAfter(source.id(), checkpoint.tick());
+        logs.deleteAfter(source.id(), checkpoint.tick());
         runs.updateProgress(source.id(), checkpoint.tick(), RunStatus.PAUSED);
         logs.appendOne(source.id(), checkpoint.tick(), "CONTROL", null,
                 "restored to checkpoint at tick " + checkpoint.tick());
         return runs.find(source.id()).orElseThrow();
+    }
+
+    public void describe(UUID runId, String description) {
+        runs.describe(runId, description);
+    }
+
+    public void describeCheckpoint(UUID checkpointId, String description) {
+        runs.describeCheckpoint(checkpointId, description);
     }
 
     public void rename(UUID runId, String name) {
@@ -210,6 +231,20 @@ public class RunService {
 
         RunStatus status = run.status().isTerminal() ? run.status() : RunStatus.PAUSED;
         RunSession session = host.host(runId, engine, state, status, run.speedTicksPerSecond());
+        // Anything recorded past where the run actually resumed describes a history it no longer
+        // has, and left alone it makes the run contradict itself: a tick counter reading 250 under
+        // a chart that runs to 300. The comparison is against the samples rather than against the
+        // recorded tick, because a run damaged by an earlier resume has already had its tick moved
+        // back to agree with the checkpoint while its samples were left where they were.
+        long sampledThrough = metrics.latestSampledTick(runId);
+        if (!run.status().isTerminal() && sampledThrough > state.tick()) {
+            log.warn("run {} resumed at tick {} but had samples through {}; discarding the difference", runId,
+                    state.tick(), sampledThrough);
+            metrics.deleteSamplesAfter(runId, state.tick());
+            logs.deleteAfter(runId, state.tick());
+            logs.appendOne(runId, state.tick(), "NOTE", null, "resumed from tick " + state.tick()
+                    + "; history after that point was discarded because no later checkpoint existed");
+        }
         if (state.tick() != run.currentTick()) {
             runs.updateProgress(runId, state.tick(), status);
         }

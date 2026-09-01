@@ -45,6 +45,17 @@ public class RunLogRepository {
         });
     }
 
+    /**
+     * Removes log entries after a tick, for a run that has been rewound.
+     *
+     * <p>The log is the record of why a run looks the way it does; entries describing events that
+     * have since been undone would make it a record of something else.
+     */
+    public int deleteAfter(UUID runId, long tick) {
+        return jdbc.sql("DELETE FROM run_event_log WHERE run_id = :runId AND tick > :tick")
+                .param("runId", runId).param("tick", tick).update();
+    }
+
     public void appendOne(UUID runId, long tick, String entryType, String subject, String detail) {
         append(runId, List.of(new LogRow(tick, entryType, subject, detail)));
     }

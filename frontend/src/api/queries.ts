@@ -1,5 +1,6 @@
 import { api } from "@/api/client";
-import type { SystemSpec } from "@/api/types";
+import { emptySpec } from "@/features/systems/specGraph";
+import type { ObjectTypeSpec, SystemSpec } from "@/api/types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 /**
@@ -39,9 +40,104 @@ export const usePresets = () =>
 export const usePalette = () =>
   useQuery({ queryKey: keys.palette, queryFn: api.palette, staleTime: Infinity });
 
+/**
+ * Editing a system's description.
+ *
+ * Goes through the existing draft endpoint rather than a new one: name, description and draft are
+ * saved together already, and a second way to write the same row would be one more thing that can
+ * disagree with the first.
+ */
+export function useDescribeSystem() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { id: string; name: string; description: string; draft: SystemSpec | null }) =>
+      api.saveDraft(input.id, input.name, input.description, input.draft ?? emptySpec(input.name)),
+    onSuccess: () => client.invalidateQueries({ queryKey: keys.systems }),
+  });
+}
+
+export function useDescribeRun(id: string | undefined) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (description: string) => api.describeRun(id!, description),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: keys.runs });
+      void client.invalidateQueries({ queryKey: keys.run(id ?? "") });
+    },
+  });
+}
+
+export function useDescribeCheckpoint(runId: string | undefined) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { checkpointId: string; description: string }) =>
+      api.describeCheckpoint(input.checkpointId, input.description),
+    onSuccess: () => client.invalidateQueries({ queryKey: keys.checkpoints(runId ?? "") }),
+  });
+}
+
+// --- object templates --------------------------------------------------------------------------
+
+export const useObjectTemplates = () =>
+  useQuery({ queryKey: ["objectTemplates"], queryFn: () => api.objectTemplates() });
+
+export const useObjectTemplate = (id: string | undefined) =>
+  useQuery({
+    queryKey: ["objectTemplate", id ?? ""],
+    queryFn: () => api.objectTemplate(id!),
+    enabled: Boolean(id),
+  });
+
+export const useObjectTemplateVersions = (id: string | undefined) =>
+  useQuery({
+    queryKey: ["objectTemplateVersions", id ?? ""],
+    queryFn: () => api.objectTemplateVersions(id!),
+    enabled: Boolean(id),
+  });
+
+export function useSaveObjectTemplate(id: string | undefined) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; description: string; draft: ObjectTypeSpec }) =>
+      api.saveObjectTemplate(id!, input.name, input.description, input.draft),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ["objectTemplates"] });
+      void client.invalidateQueries({ queryKey: ["objectTemplate", id ?? ""] });
+    },
+  });
+}
+
+export function useCreateObjectTemplate() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; description: string; draft: ObjectTypeSpec }) =>
+      api.createObjectTemplate(input.name, input.description, input.draft),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["objectTemplates"] }),
+  });
+}
+
+export function usePublishObjectTemplate(id: string | undefined) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.publishObjectTemplate(id!),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ["objectTemplateVersions", id ?? ""] });
+      void client.invalidateQueries({ queryKey: ["objectTemplates"] });
+    },
+  });
+}
+
+export function useDeleteObjectTemplate() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteObjectTemplate(id),
+    onSuccess: () => client.invalidateQueries({ queryKey: ["objectTemplates"] }),
+  });
+}
+
 // --- systems ------------------------------------------------------------------------------------
 
-export const useSystems = () => useQuery({ queryKey: keys.systems, queryFn: api.systems });
+export const useSystems = () => useQuery({ queryKey: keys.systems, queryFn: () => api.systems() });
 
 export const useSystem = (id: string | undefined) =>
   useQuery({ queryKey: keys.system(id ?? ""), queryFn: () => api.system(id!), enabled: Boolean(id) });
@@ -110,7 +206,7 @@ export function useDeleteSystem() {
  * of the time.
  */
 export const useRuns = () =>
-  useQuery({ queryKey: keys.runs, queryFn: api.runs, refetchInterval: 3000 });
+  useQuery({ queryKey: keys.runs, queryFn: () => api.runs(), refetchInterval: 3000 });
 
 export const useRun = (id: string | undefined) =>
   useQuery({ queryKey: keys.run(id ?? ""), queryFn: () => api.run(id!), enabled: Boolean(id) });

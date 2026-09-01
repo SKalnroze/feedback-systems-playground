@@ -37,3 +37,11 @@ Feature: Systems are defined, validated and published
     When a system is created from the preset "office-team-8"
     Then the draft has 8 objects
     And the draft is valid
+
+  # Adding one `int` field to a spec type once made every system stored before it unreadable: the
+  # missing value reached the record's constructor as null and the request failed with a 400 that
+  # named no field. Stored drafts outlive the code that wrote them, so an older shape has to load.
+  Scenario: A system stored before newer fields existed still loads
+    When a system is created from a draft written before groups existed
+    Then the system appears in the list of systems
+    And that system reports one instance per object

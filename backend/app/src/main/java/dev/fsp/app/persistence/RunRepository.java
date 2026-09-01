@@ -21,36 +21,50 @@ public class RunRepository {
         this.jdbc = jdbc;
     }
 
+    /** Keeps callers that do not care about a description compiling. */
     public UUID create(UUID systemVersionId, String name, long seed, double speed, UUID parentRunId,
             Long forkedFromTick, long startingTick) {
+        return create(systemVersionId, name, "", seed, speed, parentRunId, forkedFromTick, startingTick);
+    }
+
+    public UUID create(UUID systemVersionId, String name, String description, long seed, double speed,
+            UUID parentRunId, Long forkedFromTick, long startingTick) {
         UUID id = UUID.randomUUID();
         jdbc.sql("""
-                INSERT INTO simulation_run (id, system_version_id, name, seed, status, current_tick,
+                INSERT INTO simulation_run (id, system_version_id, name, description, seed, status, current_tick,
                                             speed_ticks_per_sec, parent_run_id, forked_from_tick)
-                VALUES (:id, :versionId, :name, :seed, 'CREATED', :tick, :speed, :parentId, :forkedFrom)
-                """).param("id", id).param("versionId", systemVersionId).param("name", name).param("seed", seed)
+                VALUES (:id, :versionId, :name, :description, :seed, 'CREATED', :tick, :speed, :parentId, :forkedFrom)
+                """).param("id", id).param("versionId", systemVersionId).param("name", name)
+                .param("description", description == null ? "" : description).param("seed", seed)
                 .param("tick", startingTick).param("speed", speed).param("parentId", parentRunId)
                 .param("forkedFrom", forkedFromTick).update();
         return id;
     }
 
     public Optional<Run> find(UUID id) {
-        return jdbc.sql(SELECT_RUN + " WHERE id = :id").param("id", id).query(RunRepository::mapRun).optional();
+        return jdbc.sql(SELECT_RUN + " WHERE r.id = :id").param("id", id).query(RunRepository::mapRun).optional();
     }
 
-    public List<Run> findAll() {
-        return jdbc.sql(SELECT_RUN + " ORDER BY created_at DESC").query(RunRepository::mapRun).list();
+    /** Newest first, paged: an instance accumulates runs faster than one page can usefully show. */
+    public List<Run> findAll(int limit, int offset) {
+        return jdbc.sql(SELECT_RUN + " ORDER BY r.created_at DESC LIMIT :limit OFFSET :offset")
+                .param("limit", limit).param("offset", offset).query(RunRepository::mapRun).list();
+    }
+
+    public long countAll() {
+        return jdbc.sql("SELECT count(*) FROM simulation_run")
+                .query((ResultSet rs, int rowNum) -> rs.getLong(1)).single();
     }
 
     public List<Run> findByStatus(RunStatus... statuses) {
         List<String> names = java.util.Arrays.stream(statuses).map(Enum::name).toList();
-        return jdbc.sql(SELECT_RUN + " WHERE status = ANY (:statuses) ORDER BY created_at DESC")
+        return jdbc.sql(SELECT_RUN + " WHERE r.status = ANY (:statuses) ORDER BY r.created_at DESC")
                 .param("statuses", names.toArray(String[]::new)).query(RunRepository::mapRun).list();
     }
 
     /** Runs forked from this one, so the UI can draw the what-if tree. */
     public List<Run> findChildren(UUID parentRunId) {
-        return jdbc.sql(SELECT_RUN + " WHERE parent_run_id = :parentId ORDER BY created_at")
+        return jdbc.sql(SELECT_RUN + " WHERE r.parent_run_id = :parentId ORDER BY r.created_at")
                 .param("parentId", parentRunId).query(RunRepository::mapRun).list();
     }
 
@@ -78,6 +92,17 @@ public class RunRepository {
                 """).param("id", id).param("message", message).update();
     }
 
+    /** Sets what a run was for. Separate from renaming: a name is a label, this is the reason. */
+    public void describe(UUID id, String description) {
+        jdbc.sql("UPDATE simulation_run SET description = :description, updated_at = now() WHERE id = :id")
+                .param("id", id).param("description", description == null ? "" : description).update();
+    }
+
+    public void describeCheckpoint(UUID id, String description) {
+        jdbc.sql("UPDATE checkpoint SET description = :description WHERE id = :id")
+                .param("id", id).param("description", description == null ? "" : description).update();
+    }
+
     public void rename(UUID id, String name) {
         jdbc.sql("UPDATE simulation_run SET name = :name, updated_at = now() WHERE id = :id").param("id", id)
                 .param("name", name).update();
@@ -90,25 +115,31 @@ public class RunRepository {
     // --- checkpoints ---------------------------------------------------------------------------
 
     public UUID saveCheckpoint(UUID runId, long tick, String label, byte[] state, boolean automatic) {
+        return saveCheckpoint(runId, tick, label, "", state, automatic);
+    }
+
+    public UUID saveCheckpoint(UUID runId, long tick, String label, String description, byte[] state,
+            boolean automatic) {
         UUID id = UUID.randomUUID();
         jdbc.sql("""
-                INSERT INTO checkpoint (id, run_id, tick, label, state, state_bytes, automatic)
-                VALUES (:id, :runId, :tick, :label, :state, :bytes, :automatic)
+                INSERT INTO checkpoint (id, run_id, tick, label, description, state, state_bytes, automatic)
+                VALUES (:id, :runId, :tick, :label, :description, :state, :bytes, :automatic)
                 """).param("id", id).param("runId", runId).param("tick", tick).param("label", label)
+                .param("description", description == null ? "" : description)
                 .param("state", state).param("bytes", state.length).param("automatic", automatic).update();
         return id;
     }
 
     public List<Checkpoint> findCheckpoints(UUID runId) {
         return jdbc.sql("""
-                SELECT id, run_id, tick, label, state_bytes, automatic, created_at
+                SELECT id, run_id, tick, label, description, state_bytes, automatic, created_at
                 FROM checkpoint WHERE run_id = :runId ORDER BY tick DESC
                 """).param("runId", runId).query(RunRepository::mapCheckpoint).list();
     }
 
     public Optional<Checkpoint> findCheckpoint(UUID checkpointId) {
         return jdbc.sql("""
-                SELECT id, run_id, tick, label, state_bytes, automatic, created_at
+                SELECT id, run_id, tick, label, description, state_bytes, automatic, created_at
                 FROM checkpoint WHERE id = :id
                 """).param("id", checkpointId).query(RunRepository::mapCheckpoint).optional();
     }
@@ -116,7 +147,7 @@ public class RunRepository {
     /** The most recent checkpoint of a run, which is where recovery resumes from. */
     public Optional<Checkpoint> findLatestCheckpoint(UUID runId) {
         return jdbc.sql("""
-                SELECT id, run_id, tick, label, state_bytes, automatic, created_at
+                SELECT id, run_id, tick, label, description, state_bytes, automatic, created_at
                 FROM checkpoint WHERE run_id = :runId ORDER BY tick DESC LIMIT 1
                 """).param("runId", runId).query(RunRepository::mapCheckpoint).optional();
     }
@@ -146,10 +177,15 @@ public class RunRepository {
                 """).param("runId", runId).param("keep", keep).update();
     }
 
+    // The system's name comes from the join rather than from the version's spec column: listing
+    // runs used to deserialise a full specification per row to read one string out of it.
     private static final String SELECT_RUN = """
-            SELECT id, system_version_id, name, seed, status, current_tick, speed_ticks_per_sec,
-                   parent_run_id, forked_from_tick, error_message, created_at, updated_at
-            FROM simulation_run
+            SELECT r.id, r.system_version_id, r.name, r.seed, r.status, r.current_tick, r.speed_ticks_per_sec,
+                   r.parent_run_id, r.forked_from_tick, r.error_message, r.created_at, r.updated_at,
+                   r.description, d.name AS system_name
+            FROM simulation_run r
+            JOIN system_version v ON v.id = r.system_version_id
+            JOIN system_definition d ON d.id = v.system_id
             """;
 
     private static Run mapRun(ResultSet rs, int rowNum) throws SQLException {
@@ -159,12 +195,13 @@ public class RunRepository {
                 rs.getLong("current_tick"), rs.getDouble("speed_ticks_per_sec"),
                 rs.getObject("parent_run_id", UUID.class), forkedFrom, rs.getString("error_message"),
                 rs.getObject("created_at", OffsetDateTime.class).toInstant(),
-                rs.getObject("updated_at", OffsetDateTime.class).toInstant());
+                rs.getObject("updated_at", OffsetDateTime.class).toInstant(), rs.getString("system_name"),
+                rs.getString("description"));
     }
 
     private static Checkpoint mapCheckpoint(ResultSet rs, int rowNum) throws SQLException {
         return new Checkpoint(rs.getObject("id", UUID.class), rs.getObject("run_id", UUID.class), rs.getLong("tick"),
-                rs.getString("label"), rs.getInt("state_bytes"), rs.getBoolean("automatic"),
+                rs.getString("label"), rs.getString("description"), rs.getInt("state_bytes"), rs.getBoolean("automatic"),
                 rs.getObject("created_at", OffsetDateTime.class).toInstant());
     }
 }

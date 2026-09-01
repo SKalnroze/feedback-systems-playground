@@ -35,6 +35,20 @@ export function seriesColor(key: string, explicitIndex?: number): string {
   return SERIES_COLORS[Math.abs(hash) % SERIES_COLORS.length] as string;
 }
 
+/**
+ * The same colour, resolved to a value a charting library can actually use.
+ *
+ * {@link seriesColor} returns a `var(--series-n)` token, which is right for the DOM and useless to
+ * a canvas renderer: ECharts cannot resolve custom properties, so it silently discards the string
+ * and falls back to its default grey. Every line on every chart came out the same colour because
+ * of it.
+ */
+export function seriesColorValue(key: string, explicitIndex?: number): string {
+  const token = seriesColor(key, explicitIndex);
+  const name = token.startsWith("var(") ? token.slice(4, -1).trim() : token;
+  return name.startsWith("--") ? cssVar(name, "#8899a6") : name;
+}
+
 /** Reads a CSS custom property, for the charting library which cannot use `var()` directly. */
 export function cssVar(name: string, fallback = "#888"): string {
   if (typeof window === "undefined") return fallback;

@@ -98,6 +98,7 @@ public record SystemSpec(String id, String name, String description, List<String
         checkLinks(issues);
         checkEvents(issues);
         checkTriggers(issues);
+        GroupValidation.check(this, issues);
         return List.copyOf(issues);
     }
 

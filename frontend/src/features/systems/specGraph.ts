@@ -16,6 +16,8 @@ export type ObjectNodeData = {
   typeId: string;
   variables: { name: string; label: string; value: number; kind: string }[];
   tags: string[];
+  /** Instances this node stands for. Above one it is drawn as a population. */
+  count: number;
 };
 
 export type GlobalNodeData = {
@@ -113,6 +115,7 @@ export function specToGraph(spec: SystemSpec): { nodes: SpecNode[]; edges: Edge[
       position: { x: 320, y: index * 210 },
       data: {
         kind: "object",
+        count: object.count,
         objectId: object.id,
         label: object.label,
         typeId: object.typeId,
@@ -199,6 +202,8 @@ export function newLink(source: VariableRef, target: VariableRef, existingIds: s
     delayTicks: 0,
     transfer: { kind: "transfer-linear" },
     usesRate: false,
+    // Left to be inferred from the endpoints, which is what a freshly drawn arrow means.
+    coupling: { mode: "AUTO", aggregate: "MEAN" },
   };
 }
 
@@ -222,6 +227,7 @@ export function emptySpec(name: string): SystemSpec {
       maxTicks: 0,
       interactionsPerTick: 1,
       sampleMemoryStrength: false,
+    sampleGroupMembers: 0,
     },
   };
 }

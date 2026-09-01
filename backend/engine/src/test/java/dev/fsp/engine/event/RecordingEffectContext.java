@@ -73,6 +73,13 @@ final class RecordingEffectContext implements EffectContext {
     }
 
     @Override
+    public double clampToDeclaredRange(String typeId, String variable, double value) {
+        // The test double has no spec to consult, so it records what an effect asked for rather
+        // than what a bounded model would have allowed.
+        return value;
+    }
+
+    @Override
     public void log(String message) {
         logLines.add(message);
     }

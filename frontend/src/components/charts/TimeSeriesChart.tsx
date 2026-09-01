@@ -1,6 +1,6 @@
 import { useECharts, type EChartsOption } from "@/components/charts/useECharts";
 import type { SeriesView } from "@/api/types";
-import { cssVar, formatNumber, seriesColor, seriesLabel } from "@/lib/utils";
+import { cssVar, formatNumber, seriesColorValue, seriesLabel } from "@/lib/utils";
 import { useMemo } from "react";
 
 export type TimeSeriesChartProps = {
@@ -144,9 +144,19 @@ export function TimeSeriesChart({
         showSymbol: false,
         symbolSize: 8,
         // Thin marks; the data is the ink.
-        lineStyle: { width: 2, color: seriesColor(entry.key) },
-        itemStyle: { color: seriesColor(entry.key) },
-        emphasis: { focus: "series", lineStyle: { width: 2.5 } },
+        lineStyle: { width: 2, color: seriesColorValue(entry.key) },
+        itemStyle: { color: seriesColorValue(entry.key) },
+        // Hovering marks the point under the cursor on every line; it does not hide the lines.
+        // `focus: "series"` dimmed everything except the one series being pointed at, which meant
+        // moving the mouse over a chart of eight variables erased seven of them - exactly when the
+        // reader is trying to compare them.
+        emphasis: {
+          focus: "none",
+          scale: 1.6,
+          lineStyle: { width: 2.5 },
+          itemStyle: { borderColor: surface, borderWidth: 2 },
+        },
+        blur: { lineStyle: { opacity: 1 }, itemStyle: { opacity: 1 } },
         // Largest-triangle sampling keeps the shape of a long series while drawing far fewer
         // points than it contains.
         sampling: "lttb",

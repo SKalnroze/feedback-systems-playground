@@ -3,7 +3,7 @@ import { useRunControl, useSetSpeed } from "@/api/queries";
 import { useLiveSnapshot, useStreamConnected } from "@/api/liveRun";
 import { Badge, Button, Stat } from "@/components/ui/primitives";
 import { formatTick } from "@/lib/utils";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const SPEEDS = [1, 5, 20, 100, 0] as const;
 
@@ -35,6 +35,31 @@ export function ControlBar({ run, onCheckpoint }: { run: RunDetail; onCheckpoint
   const connected = useStreamConnected(runId);
   const [stepSize, setStepSize] = useState(10);
 
+  // Transport keys. A tool whose main verb is "run it and watch" should not need the mouse for
+  // the three things you do constantly; they are skipped while a field has focus so that typing a
+  // step size does not start the run.
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+      const isRunning = (live?.status ?? run.summary.status) === "RUNNING";
+      const isTerminal = ["STOPPED", "COMPLETED", "FAILED"].includes(live?.status ?? run.summary.status);
+      if (isTerminal) return;
+
+      if (event.code === "Space") {
+        event.preventDefault();
+        control.mutate({ action: isRunning ? "PAUSE" : "START" });
+      } else if (event.key === "ArrowRight" && !isRunning) {
+        event.preventDefault();
+        control.mutate({ action: "STEP", ticks: event.shiftKey ? stepSize * 10 : stepSize });
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [control, live?.status, run.summary.status, stepSize]);
+
   const status = live?.status ?? run.summary.status;
   const tick = live?.tick ?? run.summary.tick;
   const running = status === "RUNNING";
@@ -47,7 +72,7 @@ export function ControlBar({ run, onCheckpoint }: { run: RunDetail; onCheckpoint
           variant={running ? "secondary" : "primary"}
           onClick={() => control.mutate({ action: running ? "PAUSE" : "START" })}
           disabled={terminal || control.isPending}
-          title={running ? "Pause" : "Run"}
+          title={running ? "Pause (space)" : "Run (space)"}
         >
           {running ? "❙❙ Pause" : "▶ Run"}
         </Button>
@@ -55,7 +80,7 @@ export function ControlBar({ run, onCheckpoint }: { run: RunDetail; onCheckpoint
         <Button
           onClick={() => control.mutate({ action: "STEP", ticks: stepSize })}
           disabled={running || terminal || control.isPending}
-          title={`Advance ${stepSize} ticks and stop`}
+          title={`Advance ${stepSize} ticks and stop (right arrow, shift for ten times)`}
         >
           ⏭ Step
         </Button>

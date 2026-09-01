@@ -12,11 +12,20 @@ package dev.fsp.engine.spec;
  *                                is illuminating but multiplies the data volume
  */
 public record SimulationSettings(int metricSampleInterval, int autoCheckpointInterval, long maxTicks,
-        int interactionsPerTick, boolean sampleMemoryStrength) {
+        int interactionsPerTick, boolean sampleMemoryStrength, int sampleGroupMembers) {
 
-    public static final SimulationSettings DEFAULT = new SimulationSettings(1, 500, 0L, 1, false);
+    public static final SimulationSettings DEFAULT = new SimulationSettings(1, 500, 0L, 1, false, 0);
+
+    /** Keeps every caller written before group sampling existed compiling and unchanged. */
+    public SimulationSettings(int metricSampleInterval, int autoCheckpointInterval, long maxTicks,
+            int interactionsPerTick, boolean sampleMemoryStrength) {
+        this(metricSampleInterval, autoCheckpointInterval, maxTicks, interactionsPerTick, sampleMemoryStrength, 0);
+    }
 
     public SimulationSettings {
+        if (sampleGroupMembers < 0) {
+            sampleGroupMembers = 0;
+        }
         if (metricSampleInterval <= 0) {
             throw new IllegalArgumentException("metricSampleInterval must be positive: " + metricSampleInterval);
         }

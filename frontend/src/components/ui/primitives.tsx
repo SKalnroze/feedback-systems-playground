@@ -235,6 +235,27 @@ export function EmptyState({
   );
 }
 
+/**
+ * Placeholder rows shaped like the content that is coming.
+ *
+ * A spinner says "wait"; a skeleton says "a list of about this size is arriving", which stops the
+ * layout jumping when it does and makes a slow panel look slow rather than broken.
+ */
+export function Skeleton({ rows = 3, className }: { rows?: number; className?: string }) {
+  return (
+    <div className={cn("space-y-2 p-3", className)} aria-hidden>
+      {Array.from({ length: rows }, (_, index) => (
+        <div
+          key={index}
+          className="h-8 animate-pulse rounded-md bg-[var(--surface-2)]"
+          // Staggered so the block reads as several rows rather than one flashing panel.
+          style={{ animationDelay: `${index * 90}ms`, opacity: 1 - index * 0.12 }}
+        />
+      ))}
+    </div>
+  );
+}
+
 export function Spinner({ className }: { className?: string }) {
   return (
     <span

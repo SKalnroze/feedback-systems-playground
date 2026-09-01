@@ -6,6 +6,8 @@ import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 const NAV = [
   { to: "/runs", label: "Runs" },
   { to: "/systems", label: "Systems" },
+  { to: "/objects", label: "Objects" },
+  { to: "/compare", label: "Compare" },
 ] as const;
 
 /** Application chrome: navigation, theme switch, and the routed page beneath. */

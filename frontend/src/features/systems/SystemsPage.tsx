@@ -1,4 +1,4 @@
-import { useCreateFromPreset, useCreateSystem, useDeleteSystem, usePresets, useSystems } from "@/api/queries";
+import { useCreateFromPreset, useCreateSystem, useDeleteSystem, useDescribeSystem, usePresets, useSystems } from "@/api/queries";
 import {
   Badge,
   Button,
@@ -8,9 +8,12 @@ import {
   ErrorNote,
   Field,
   Input,
+  Skeleton,
   Spinner,
 } from "@/components/ui/primitives";
 import { emptySpec } from "@/features/systems/specGraph";
+import { ConfirmButton } from "@/components/ui/ConfirmButton";
+import { EditableDescription } from "@/components/ui/EditableDescription";
 import { formatRelativeTime } from "@/lib/utils";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
@@ -18,6 +21,7 @@ import { useState } from "react";
 /** Systems you have defined, and the presets you can start from. */
 export function SystemsPage() {
   const systems = useSystems();
+  const saveDescription = useDescribeSystem();
   const presets = usePresets();
   const createSystem = useCreateSystem();
   const fromPreset = useCreateFromPreset();
@@ -49,7 +53,9 @@ export function SystemsPage() {
           subtitle="Each is edited as a draft, then published as a version runs can point at."
           actions={systems.isFetching ? <Spinner /> : null}
         />
-        {systems.data && systems.data.length > 0 ? (
+        {systems.isLoading ? (
+          <Skeleton rows={4} />
+        ) : systems.data && systems.data.length > 0 ? (
           <ul className="divide-y divide-[var(--border)]">
             {systems.data.map((system) => (
               <li key={system.id} className="flex items-center gap-3 px-4 py-3">
@@ -61,10 +67,21 @@ export function SystemsPage() {
                   >
                     {system.name}
                   </Link>
-                  <div className="truncate text-xs text-[var(--text-muted)]">
-                    {system.description || "No description"} · edited{" "}
-                    {formatRelativeTime(system.updatedAt)}
+                  <div className="truncate text-[11px] text-[var(--text-muted)]">
+                    edited {formatRelativeTime(system.updatedAt)}
                   </div>
+                  <EditableDescription
+                    value={system.description}
+                    placeholder="What does this system model?"
+                    onSave={(description) =>
+                      saveDescription.mutate({
+                        id: system.id,
+                        name: system.name,
+                        description,
+                        draft: system.draft,
+                      })
+                    }
+                  />
                 </div>
                 {system.draft ? (
                   <Badge tone="neutral">
@@ -73,9 +90,10 @@ export function SystemsPage() {
                 ) : (
                   <Badge tone="warning">no draft</Badge>
                 )}
-                <Button variant="ghost" size="sm" onClick={() => deleteSystem.mutate(system.id)}>
-                  Delete
-                </Button>
+                <ConfirmButton
+                  onConfirm={() => deleteSystem.mutate(system.id)}
+                  title="Delete this system and its published versions"
+                />
               </li>
             ))}
           </ul>
@@ -122,14 +140,29 @@ export function SystemsPage() {
                   className="mt-2"
                   disabled={fromPreset.isPending}
                   onClick={async () => {
-                    const created = await fromPreset.mutateAsync({ presetId: preset.id });
-                    void navigate({ to: "/systems/$systemId", params: { systemId: created.id } });
+                    // Without this catch a failed request rejected into nothing: the button did
+                    // not navigate, showed no error, and looked simply dead. That is how a 403
+                    // from the API hid for an entire session.
+                    setError(null);
+                    try {
+                      const created = await fromPreset.mutateAsync({ presetId: preset.id });
+                      void navigate({ to: "/systems/$systemId", params: { systemId: created.id } });
+                    } catch (cause) {
+                      setError(
+                        cause instanceof Error ? cause.message : "Could not create a system from that preset.",
+                      );
+                    }
                   }}
                 >
                   Use this
                 </Button>
               </li>
             ))}
+            {error ? (
+              <li className="px-4 py-3">
+                <ErrorNote message={error} />
+              </li>
+            ) : null}
             {presets.isLoading ? (
               <li className="px-4 py-3 text-xs text-[var(--text-muted)]">Loading presets…</li>
             ) : null}

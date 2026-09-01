@@ -12,7 +12,13 @@ import java.util.Set;
  * @param defaultFeatures cue features every instance starts with, on top of its own
  */
 public record ObjectTypeSpec(String id, String label, List<VariableSpec> variables, MemorySettings memory,
-        Set<String> defaultTags, Map<String, Double> defaultFeatures) {
+        Set<String> defaultTags, Map<String, Double> defaultFeatures, String templateId, Integer templateVersion) {
+
+    /** Keeps every caller written before templates existed compiling; such a type has no origin. */
+    public ObjectTypeSpec(String id, String label, List<VariableSpec> variables, MemorySettings memory,
+            Set<String> defaultTags, Map<String, Double> defaultFeatures) {
+        this(id, label, variables, memory, defaultTags, defaultFeatures, null, null);
+    }
 
     public ObjectTypeSpec {
         if (id == null || id.isBlank()) {
@@ -29,7 +35,17 @@ public record ObjectTypeSpec(String id, String label, List<VariableSpec> variabl
     }
 
     public static ObjectTypeSpec of(String id, List<VariableSpec> variables, MemorySettings memory) {
-        return new ObjectTypeSpec(id, id, variables, memory, Set.of(), Map.of());
+        return new ObjectTypeSpec(id, id, variables, memory, Set.of(), Map.of(), null, null);
+    }
+
+    /** True when this type was copied out of a shared template and can go out of date. */
+    public boolean fromTemplate() {
+        return templateId != null && templateVersion != null;
+    }
+
+    /** Records where a type came from, so the editor can notice the template moving on without it. */
+    public ObjectTypeSpec tracking(String template, int version) {
+        return new ObjectTypeSpec(id, label, variables, memory, defaultTags, defaultFeatures, template, version);
     }
 
     public VariableSpec variable(String name) {

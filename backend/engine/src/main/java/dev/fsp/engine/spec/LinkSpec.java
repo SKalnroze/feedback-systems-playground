@@ -11,11 +11,21 @@ import dev.fsp.engine.graph.Transfer;
  * @param usesRate   when true the link responds to the source's change since last tick rather than
  *                   its level, which is how "a sudden drop in trust causes withdrawal" differs from
  *                   "low trust causes withdrawal"
+ * @param coupling   how the edge connects members when either endpoint is a group
  */
 public record LinkSpec(String id, String label, VariableRef source, VariableRef target, double gain, int delayTicks,
-        Transfer transfer, boolean usesRate) {
+        Transfer transfer, boolean usesRate, Coupling coupling) {
+
+    /** Keeps every caller written before coupling existed compiling, with inference as before. */
+    public LinkSpec(String id, String label, VariableRef source, VariableRef target, double gain, int delayTicks,
+            Transfer transfer, boolean usesRate) {
+        this(id, label, source, target, gain, delayTicks, transfer, usesRate, Coupling.AUTO);
+    }
 
     public LinkSpec {
+        if (coupling == null) {
+            coupling = Coupling.AUTO;
+        }
         if (id == null || id.isBlank()) {
             throw new IllegalArgumentException("link id must not be blank");
         }
@@ -33,19 +43,23 @@ public record LinkSpec(String id, String label, VariableRef source, VariableRef 
     }
 
     public static LinkSpec of(String id, VariableRef source, VariableRef target, double gain) {
-        return new LinkSpec(id, id, source, target, gain, 0, Transfer.linear(), false);
+        return new LinkSpec(id, id, source, target, gain, 0, Transfer.linear(), false, Coupling.AUTO);
     }
 
     public LinkSpec delayedBy(int ticks) {
-        return new LinkSpec(id, label, source, target, gain, ticks, transfer, usesRate);
+        return new LinkSpec(id, label, source, target, gain, ticks, transfer, usesRate, coupling);
     }
 
     public LinkSpec through(Transfer newTransfer) {
-        return new LinkSpec(id, label, source, target, gain, delayTicks, newTransfer, usesRate);
+        return new LinkSpec(id, label, source, target, gain, delayTicks, newTransfer, usesRate, coupling);
     }
 
     public LinkSpec onRateOfChange() {
-        return new LinkSpec(id, label, source, target, gain, delayTicks, transfer, true);
+        return new LinkSpec(id, label, source, target, gain, delayTicks, transfer, true, coupling);
+    }
+
+    public LinkSpec coupledBy(Coupling newCoupling) {
+        return new LinkSpec(id, label, source, target, gain, delayTicks, transfer, usesRate, newCoupling);
     }
 
     /** Contribution this link produces from a source reading, before delay. */

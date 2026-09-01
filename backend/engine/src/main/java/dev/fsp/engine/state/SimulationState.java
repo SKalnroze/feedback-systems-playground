@@ -101,6 +101,23 @@ public final class SimulationState {
         return matches;
     }
 
+    /**
+     * Every active member of an authored object, in the order they were created.
+     *
+     * <p>Order matters: member-to-member couplings pair by position, and a pairing that shuffled
+     * between ticks would make a link's effect depend on iteration order rather than on the model.
+     */
+    public List<ObjectState> membersOf(String groupId) {
+        List<ObjectState> members = new ArrayList<>();
+        for (ObjectState object : objects.values()) {
+            if (object.isActive() && object.groupId().equals(groupId)) {
+                members.add(object);
+            }
+        }
+        members.sort(java.util.Comparator.comparingInt(ObjectState::memberIndex));
+        return members;
+    }
+
     /** Removes an object and everything remembered about it. */
     public void removeObject(String id) {
         objects.remove(id);

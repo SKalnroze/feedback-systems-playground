@@ -1,6 +1,7 @@
 import type { RunStatus, RunSummary } from "@/api/types";
 import {
   useCreateRun,
+  useDescribeRun,
   useDeleteRun,
   useRuns,
   useSystems,
@@ -17,8 +18,11 @@ import {
   Field,
   Input,
   Select,
+  Skeleton,
   Spinner,
 } from "@/components/ui/primitives";
+import { ConfirmButton } from "@/components/ui/ConfirmButton";
+import { EditableDescription } from "@/components/ui/EditableDescription";
 import { formatTick } from "@/lib/utils";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
@@ -46,7 +50,7 @@ export function RunsPage() {
           actions={runs.isFetching ? <Spinner /> : null}
         />
         {runs.isLoading ? (
-          <div className="p-6 text-sm text-[var(--text-muted)]">Loading runs…</div>
+          <Skeleton rows={5} />
         ) : runs.data && runs.data.length > 0 ? (
           <ul className="divide-y divide-[var(--border)]">
             {runs.data.map((run) => (
@@ -67,6 +71,7 @@ export function RunsPage() {
 }
 
 function RunRow({ run, onDelete }: { run: RunSummary; onDelete: () => void }) {
+  const describe = useDescribeRun(run.id);
   return (
     <li className="flex items-center gap-3 px-4 py-3">
       <div className="min-w-0 flex-1">
@@ -89,6 +94,11 @@ function RunRow({ run, onDelete }: { run: RunSummary; onDelete: () => void }) {
         <div className="mt-0.5 truncate text-xs text-[var(--text-muted)]">
           {run.systemName} · seed <span className="tabular">{run.seed}</span>
         </div>
+        <EditableDescription
+          value={run.description}
+          onSave={(description) => describe.mutate(description)}
+          placeholder="What is this run for?"
+        />
         {run.error ? <div className="mt-1 text-xs text-[var(--status-critical)]">{run.error}</div> : null}
       </div>
 
@@ -97,9 +107,7 @@ function RunRow({ run, onDelete }: { run: RunSummary; onDelete: () => void }) {
         <div className="text-xs text-[var(--text-muted)]">ticks</div>
       </div>
 
-      <Button variant="ghost" size="sm" onClick={onDelete} title="Delete this run and its data">
-        Delete
-      </Button>
+      <ConfirmButton onConfirm={onDelete} title="Delete this run, its samples, log and checkpoints" />
     </li>
   );
 }
@@ -119,6 +127,7 @@ function NewRunPanel() {
   const [versionId, setVersionId] = useState("");
   const [name, setName] = useState("");
   const [seed, setSeed] = useState("");
+  const [description, setDescription] = useState("");
   const [speed, setSpeed] = useState("10");
   const [autoStart, setAutoStart] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -141,12 +150,14 @@ function NewRunPanel() {
       await createRun.mutateAsync({
         systemVersionId: chosenVersion,
         name: name || undefined,
+        description: description || undefined,
         seed: seed || null,
         speed: speed ? Number(speed) : null,
         autoStart,
       });
       setName("");
       setSeed("");
+      setDescription("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not start the run.");
     }
@@ -195,6 +206,14 @@ function NewRunPanel() {
 
         <Field label="Name" hint="Optional. Defaults to the system's name.">
           <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Baseline" />
+        </Field>
+
+        <Field label="What is it for?" hint="Optional. Shown in the run list to tell forks apart.">
+          <Input
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            placeholder="Does the rumour die out at this gossip rate?"
+          />
         </Field>
 
         <div className="grid grid-cols-2 gap-3">

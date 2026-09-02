@@ -14,6 +14,7 @@ import {
   Spinner,
 } from "@/components/ui/primitives";
 import { useTheme } from "@/lib/theme";
+import { useValueFormat } from "@/lib/valueFormat";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
@@ -32,9 +33,10 @@ import { useMemo, useState } from "react";
 export function ComparePage() {
   const runs = useRuns();
   const { theme } = useTheme();
+  const { format } = useValueFormat();
   const [selected, setSelected] = useState<string[]>([]);
   const [seriesKey, setSeriesKey] = useState("");
-  const [mode, setMode] = useState<"overlay" | "band">("overlay");
+  const [mode, setMode] = useState<"overlay" | "band" | "difference">("overlay");
 
   // The catalogue of the first selection: runs of the same system share series keys, and offering
   // a key that only one run has would produce a chart with one line and no explanation.
@@ -50,7 +52,7 @@ export function ComparePage() {
 
   const overlay = useQuery({
     queryKey: ["compare", "overlay", selected, seriesKey],
-    enabled: mode === "overlay" && selected.length > 0 && seriesKey !== "",
+    enabled: (mode === "overlay" || mode === "difference") && selected.length > 0 && seriesKey !== "",
     queryFn: async () => {
       const responses = await Promise.all(
         selected.map((runId) => api.seriesData(runId, [seriesKey], 0, -1, 0)),
@@ -69,6 +71,17 @@ export function ComparePage() {
   });
 
   const chartSeries = useMemo(() => {
+    if (mode === "difference") {
+      // A − B as its own line. "These two diverge after tick 300" is a line crossing zero, which is
+      // a fact a reader can see, rather than two lines they have to subtract by eye.
+      const [first, second] = overlay.data ?? [];
+      if (!first || !second) return [];
+      const byTick = new Map(second.points.map(([tick, value]) => [tick, value]));
+      const difference = first.points
+        .filter(([tick]) => byTick.has(tick))
+        .map(([tick, value]) => [tick, value - (byTick.get(tick) ?? 0)] as [number, number]);
+      return [{ key: `${first.name} − ${second.name}`, points: difference, bucketed: false }];
+    }
     if (mode === "overlay") {
       return (overlay.data ?? []).map((entry) => ({ key: entry.name, points: entry.points, bucketed: false }));
     }
@@ -131,7 +144,9 @@ export function ComparePage() {
           subtitle={
             mode === "overlay"
               ? "One line per run, on a shared axis"
-              : "Mean and range across the selected runs"
+              : mode === "difference"
+                ? "The first run minus the second; zero means they agree"
+                : "Mean and range across the selected runs"
           }
           actions={loading ? <Spinner /> : null}
         />
@@ -164,6 +179,14 @@ export function ComparePage() {
               <Button size="sm" variant={mode === "band" ? "primary" : "ghost"} onClick={() => setMode("band")}>
                 Band
               </Button>
+              <Button
+                size="sm"
+                variant={mode === "difference" ? "primary" : "ghost"}
+                title="The first selected run minus the second"
+                onClick={() => setMode("difference")}
+              >
+                Difference
+              </Button>
             </div>
 
             <span className="text-xs text-[var(--text-muted)]">
@@ -175,13 +198,18 @@ export function ComparePage() {
             <ErrorNote message={failure instanceof Error ? failure.message : "Could not load the comparison."} />
           ) : null}
 
-          {mode === "band" && selected.length < 2 ? (
+          {mode === "difference" && selected.length !== 2 ? (
+            <EmptyState
+              title="Pick exactly two runs"
+              description="A difference is between two runs; with three it is ambiguous which pair is meant."
+            />
+          ) : mode === "band" && selected.length < 2 ? (
             <EmptyState
               title="Pick at least two runs"
               description="A band is a spread across replicates; one run has no spread to show."
             />
           ) : chartSeries.length > 0 ? (
-            <TimeSeriesChart series={chartSeries} theme={theme} height={360} />
+            <TimeSeriesChart series={chartSeries} theme={theme} height={360} format={format} />
           ) : (
             <EmptyState
               title="Nothing charted yet"

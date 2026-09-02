@@ -36,6 +36,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @RequestMapping("/api/v1/runs/{runId}")
 public class ObservabilityController {
 
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(ObservabilityController.class);
+
     /** Hard ceiling on rows returned in one request, whatever the caller asks for. */
     private static final int MAX_LIMIT = 5_000;
 
@@ -124,6 +127,19 @@ public class ObservabilityController {
     }
 
     /**
+     * How a group's members are spread across one variable, at the run's current tick.
+     *
+     * <p>The question a mean cannot answer. Two populations with identical averages can be a
+     * contented group and a group that has split in half, and only the distribution tells them
+     * apart.
+     */
+    @GetMapping("/distribution")
+    public RunService.Distribution distribution(@PathVariable UUID runId, @RequestParam String group,
+            @RequestParam String variable, @RequestParam(defaultValue = "24") int buckets) {
+        return runs.distribution(runId, group, variable, buckets);
+    }
+
+    /**
      * Live updates while a run is going.
      *
      * <p>Subscribing also loads the run if it was not resident, so opening its page is enough to
@@ -131,7 +147,16 @@ public class ObservabilityController {
      */
     @GetMapping("/stream")
     public SseEmitter stream(@PathVariable UUID runId) {
-        runs.ensureHosted(runId);
+        // A finished or unresumable run has nothing to stream, and trying to host it would fail the
+        // subscription. Its page still opens and still draws everything it recorded; there is just
+        // no live feed, which is exactly true of a run that is not going anywhere.
+        runs.find(runId).filter(run -> !run.status().isTerminal()).ifPresent(run -> {
+            try {
+                runs.ensureHosted(runId);
+            } catch (RuntimeException e) {
+                log.info("run {} cannot be hosted, streaming its stored state only: {}", runId, e.getMessage());
+            }
+        });
         return broadcaster.subscribe(runId);
     }
 

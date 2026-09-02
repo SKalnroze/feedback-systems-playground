@@ -3,6 +3,7 @@ package dev.fsp.app.steps;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import dev.fsp.app.support.World;
+import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
 import java.util.ArrayList;
 import java.util.List;
@@ -109,4 +110,34 @@ public class ObservabilitySteps {
         response.get("items").forEach(entries::add);
         return entries;
     }
+    @Given("a run of a system with a group of {int} people")
+    public void aRunWithACrowd(int members) {
+        world.namedSystem("population");
+        world.addCrowd("crowd", members);
+        world.ensureSystem();
+        world.createRun(4242L);
+    }
+
+    @Then("the distribution of {string} across {string} covers all {int} members")
+    public void theDistributionCoversEveryMember(String variable, String group, int members) {
+        JsonNode distribution = world.get("/api/v1/runs/" + world.runId() + "/distribution?group=" + group
+                + "&variable=" + variable);
+        assertThat(distribution.get("members").asInt()).isEqualTo(members);
+        assertThat(distribution.get("buckets").size()).isPositive();
+        lastDistribution = distribution;
+    }
+
+    @Then("the distribution buckets sum to the number of members")
+    public void theBucketsSumToTheMembers() {
+        // Every member has to land in exactly one bucket. Off-by-one at the top edge is the classic
+        // histogram bug, and it shows up here as a total that is one short.
+        int total = 0;
+        for (JsonNode bucket : lastDistribution.get("buckets")) {
+            total += bucket.get("count").asInt();
+        }
+        assertThat(total).isEqualTo(lastDistribution.get("members").asInt());
+    }
+
+    private JsonNode lastDistribution;
+
 }

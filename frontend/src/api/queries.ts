@@ -280,12 +280,18 @@ export function useDeleteRun() {
 
 // --- observability ------------------------------------------------------------------------------
 
-export const useSeriesCatalogue = (id: string | undefined) =>
+export const useSeriesCatalogue = (
+  id: string | undefined,
+  // The runs list asks for a catalogue per row purely to pick a series to sketch. Polling every one
+  // of those every five seconds would put a request per run per five seconds behind a page nobody
+  // is watching for changes, so callers that only need it once turn the polling off.
+  refetchInterval: number | false = 5000,
+) =>
   useQuery({
     queryKey: keys.seriesCatalogue(id ?? ""),
     queryFn: () => api.seriesCatalogue(id!),
     enabled: Boolean(id),
-    refetchInterval: 5000,
+    refetchInterval,
   });
 
 export const useSeriesData = (
@@ -321,6 +327,25 @@ export const useMemories = (id: string | undefined, ownerId: string | undefined)
     queryKey: keys.memories(id ?? "", ownerId),
     queryFn: () => api.memories(id!, ownerId),
     enabled: Boolean(id),
+  });
+
+/**
+ * The spread of one variable across a group's members.
+ *
+ * Refetched while the run is live, since a distribution is a snapshot of the current state rather
+ * than a stored history: unlike a series, there is no earlier value to fall back on.
+ */
+export const useDistribution = (
+  id: string | undefined,
+  group: string | undefined,
+  variable: string | undefined,
+  live: boolean,
+) =>
+  useQuery({
+    queryKey: ["distribution", id ?? "", group ?? "", variable ?? ""],
+    queryFn: () => api.distribution(id!, group!, variable!),
+    enabled: Boolean(id) && Boolean(group) && Boolean(variable),
+    refetchInterval: live ? 2000 : false,
   });
 
 export const useRelationships = (id: string | undefined) =>

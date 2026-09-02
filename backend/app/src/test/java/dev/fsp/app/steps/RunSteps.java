@@ -1,6 +1,7 @@
 package dev.fsp.app.steps;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import dev.fsp.app.support.World;
 import io.cucumber.java.en.Given;
@@ -25,6 +26,9 @@ public class RunSteps {
 
     @Autowired
     private dev.fsp.app.persistence.MetricRepository metrics;
+
+    @Autowired
+    private dev.fsp.app.persistence.RunRepository checkpoints;
 
     private long pausedAtTick;
 
@@ -130,6 +134,30 @@ public class RunSteps {
     @When("the run is opened again")
     public void theRunIsOpenedAgain() {
         runs.ensureHosted(java.util.UUID.fromString(world.runId()));
+    }
+
+    /** Drops the run the way a killed process would: no chance to write a resume checkpoint. */
+    @When("the run is unloaded from memory without checkpointing")
+    public void theRunIsUnloadedWithoutCheckpointing() {
+        java.util.UUID id = java.util.UUID.fromString(world.runId());
+        host.evict(id);
+        // Remove whatever the graceful path wrote, leaving the state a hard stop would leave.
+        checkpoints.deleteAllCheckpoints(id);
+    }
+
+    /** Refusing is the point: the alternative was silently restarting at zero and deleting the run. */
+    @Then("opening the run again is refused")
+    public void openingTheRunAgainIsRefused() {
+        assertThatThrownBy(() -> runs.ensureHosted(java.util.UUID.fromString(world.runId())))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("no checkpoint");
+    }
+
+    @Then("samples are still recorded up to tick {long}")
+    public void samplesAreStillRecordedUpTo(long tick) {
+        assertThat(metrics.latestSampledTick(java.util.UUID.fromString(world.runId())))
+                .as("recorded history is kept even when the run cannot be resumed")
+                .isGreaterThanOrEqualTo(tick);
     }
 
     @Then("no samples are recorded after tick {long}")

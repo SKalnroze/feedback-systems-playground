@@ -11,7 +11,9 @@ import dev.fsp.app.persistence.SystemRecords.SystemVersion;
 import dev.fsp.app.persistence.SystemRepository;
 import dev.fsp.engine.Engine;
 import dev.fsp.engine.spec.SystemSpec;
+import dev.fsp.engine.state.ObjectState;
 import dev.fsp.engine.state.SimulationState;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -174,6 +176,79 @@ public class RunService {
         runs.describeCheckpoint(checkpointId, description);
     }
 
+    /**
+     * How one variable is spread across the members of a group, right now.
+     *
+     * <p>A group is recorded as statistics, so the individual values exist only in the live state -
+     * which is exactly why this has to be computed here rather than read from the metric tables. A
+     * mean of 0.5 can mean everyone sitting at 0.5, or half the population at zero and half at one,
+     * and those are completely different findings that the chart cannot tell apart.
+     *
+     * <p>Bucketed server-side: two thousand values is not something to send to a browser to be
+     * counted there.
+     *
+     * @param buckets how many bars to divide the range into
+     */
+    public Distribution distribution(UUID runId, String groupId, String variable, int buckets) {
+        Run run = runs.find(runId).orElseThrow(() -> new IllegalArgumentException("no such run: " + runId));
+        // Only from a session that is already resident, or one that can legitimately be started.
+        // Hosting a finished run to ask it a question would rebuild it from nothing and answer
+        // about a simulation that never happened.
+        Optional<RunSession> resident = host.session(runId);
+        if (resident.isEmpty() && run.status().isTerminal()) {
+            return new Distribution(groupId, variable, run.currentTick(), 0, 0.0, 0.0, 0.0, List.of());
+        }
+        RunSession session = resident.orElseGet(() -> ensureHosted(runId));
+        List<ObjectState> members = session.state().membersOf(groupId);
+        if (members.isEmpty()) {
+            return new Distribution(groupId, variable, session.tick(), 0, 0.0, 0.0, 0.0, List.of());
+        }
+
+        int bars = Math.clamp(buckets, 2, 60);
+        double[] values = new double[members.size()];
+        double min = Double.MAX_VALUE;
+        double max = -Double.MAX_VALUE;
+        double total = 0.0;
+        for (int index = 0; index < members.size(); index++) {
+            double value = members.get(index).getOrDefault(variable, 0.0);
+            values[index] = value;
+            min = Math.min(min, value);
+            max = Math.max(max, value);
+            total += value;
+        }
+
+        // A population where everybody holds the same value has no range to divide up. Widening it
+        // arbitrarily would draw a spread that is not there, so it collapses to a single full bar.
+        if (max - min < 1e-12) {
+            return new Distribution(groupId, variable, session.tick(), members.size(), min, max,
+                    total / members.size(), List.of(new Bucket(min, max, members.size())));
+        }
+
+        int[] counts = new int[bars];
+        double width = (max - min) / bars;
+        for (double value : values) {
+            // The topmost value belongs in the last bucket rather than in a bucket of its own past
+            // the end, which is what a naive floor() gives you.
+            int slot = Math.min(bars - 1, (int) ((value - min) / width));
+            counts[slot]++;
+        }
+
+        List<Bucket> histogram = new ArrayList<>(bars);
+        for (int slot = 0; slot < bars; slot++) {
+            histogram.add(new Bucket(min + slot * width, min + (slot + 1) * width, counts[slot]));
+        }
+        return new Distribution(groupId, variable, session.tick(), members.size(), min, max,
+                total / members.size(), histogram);
+    }
+
+    /** One bar: the range it covers and how many members fell inside it. */
+    public record Bucket(double from, double to, int count) {
+    }
+
+    public record Distribution(String groupId, String variable, long tick, int members, double min, double max,
+            double mean, List<Bucket> buckets) {
+    }
+
     public void rename(UUID runId, String name) {
         runs.rename(runId, name);
     }
@@ -238,6 +313,24 @@ public class RunService {
         // back to agree with the checkpoint while its samples were left where they were.
         long sampledThrough = metrics.latestSampledTick(runId);
         if (!run.status().isTerminal() && sampledThrough > state.tick()) {
+            if (latest.isEmpty()) {
+                // Nothing to resume from at all. The live state has gone back to nothing, but the
+                // samples and the log are the record of what actually happened, and they are not
+                // reconstructible from anything else. Deleting them to make the two agree destroys
+                // the evidence to tidy up the bookkeeping, which is the wrong way round: the run is
+                // left where it got to and marked as no longer resumable.
+                log.warn("run {} has samples through {} but no checkpoint; keeping the history and "
+                        + "leaving the run un-resumable rather than discarding it", runId, sampledThrough);
+                logs.appendOne(runId, sampledThrough, "NOTE", null,
+                        "this run stopped before its first checkpoint, so it cannot be resumed. Its recorded "
+                                + "history up to tick " + sampledThrough + " is intact; fork a checkpoint of "
+                                + "another run, or start a new one, to carry on from here.");
+                host.evict(runId);
+                runs.updateProgress(runId, sampledThrough, RunStatus.STOPPED);
+                throw new IllegalStateException("run " + runId + " cannot be resumed: it has no checkpoint");
+            }
+            // A checkpoint exists but lags the samples: the ticks after it belong to a future the
+            // restored state no longer has, so they genuinely have to go.
             log.warn("run {} resumed at tick {} but had samples through {}; discarding the difference", runId,
                     state.tick(), sampledThrough);
             metrics.deleteSamplesAfter(runId, state.tick());
@@ -245,7 +338,10 @@ public class RunService {
             logs.appendOne(runId, state.tick(), "NOTE", null, "resumed from tick " + state.tick()
                     + "; history after that point was discarded because no later checkpoint existed");
         }
-        if (state.tick() != run.currentTick()) {
+        // A finished run's recorded tick is its final answer. Hosting one - which happens whenever
+        // anything asks for its live state - must never write that number backwards, or opening a
+        // panel silently resets the run to zero.
+        if (state.tick() != run.currentTick() && !run.status().isTerminal()) {
             runs.updateProgress(runId, state.tick(), status);
         }
         return session;

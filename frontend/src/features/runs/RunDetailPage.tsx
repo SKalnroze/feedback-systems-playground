@@ -1,5 +1,6 @@
 import { useCheckpoint, useForks, useRun,
   useDescribeRun,
+  useRunLog,
 } from "@/api/queries";
 import { useLiveSnapshot, useRunStream } from "@/api/liveRun";
 import { Badge, Button, Card, ErrorNote, Spinner } from "@/components/ui/primitives";
@@ -12,12 +13,15 @@ import {
   RelationshipPanel,
 } from "@/features/runs/InspectorPanels";
 import { EditableDescription } from "@/components/ui/EditableDescription";
+import { useChartWorkspace } from "@/features/runs/useChartWorkspace";
+import { DistributionPanel } from "@/features/runs/DistributionPanel";
 import { useTheme } from "@/lib/theme";
+import { useValueFormat } from "@/lib/valueFormat";
 import { cn, formatTick } from "@/lib/utils";
 import { Link, useParams } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
-type Tab = "charts" | "relationships" | "memories";
+type Tab = "charts" | "distribution" | "relationships" | "memories";
 
 /**
  * The run dashboard.
@@ -39,12 +43,47 @@ export function RunDetailPage() {
 
   const [tab, setTab] = useState<Tab>("charts");
   const [cursorTick, setCursorTick] = useState<number | null>(null);
-  const [panels, setPanels] = useState<ChartPanelConfig[]>([]);
+  const [hoverTick, setHoverTick] = useState<number | null>(null);
+  // The selected tick window lives here rather than in the charts, because once it can also narrow
+  // the log and the memory table it is a statement about what part of the run is being read.
+  const [range, setRange] = useState<{ from: number; to: number } | null>(null);
+  const [crossFilter, setCrossFilter] = useState(false);
+  const { format, update: setFormat } = useValueFormat();
+  const workspace = useChartWorkspace(runId);
+  const panels = workspace.state.panels;
+  const setPanels = (next: ChartPanelConfig[]) => workspace.update({ panels: next });
+
+  // Events, checkpoints and notes from the log, drawn on every panel's time axis. Capped and
+  // fetched once: this is a backdrop for the charts, not the log panel, and a run with thousands of
+  // interactions would otherwise draw thousands of rules.
+  const eventLog = useRunLog(runId, "EVENT", 200, false);
+  // Notes rather than checkpoints: automatic checkpoints land every couple of hundred ticks and
+  // marking them all says nothing about the run, while the Checkpoints panel already lists them.
+  const noteLog = useRunLog(runId, "NOTE", 50, false);
+  const chartEvents = useMemo(
+    () =>
+      [...(eventLog.data?.items ?? []), ...(noteLog.data?.items ?? [])].map((entry) => ({
+        tick: entry.tick,
+        type: entry.type,
+        detail: entry.detail,
+      })),
+    [eventLog.data, noteLog.data],
+  );
 
   const objectIds = useMemo(
     () => (run.data?.spec?.objects ?? []).map((object) => object.id),
     [run.data?.spec],
   );
+
+  // Label and size of each authored object, so a series key can be said in words rather than left
+  // as "staff.morale.mean" for the reader to decode.
+  const groups = useMemo(() => {
+    const byId = new Map<string, { label: string; count: number }>();
+    for (const object of run.data?.spec?.objects ?? []) {
+      byId.set(object.id, { label: object.label || object.id, count: object.count });
+    }
+    return byId;
+  }, [run.data?.spec]);
 
   // Which type each object is, so the series picker can offer "every learner's motivation" rather
   // than making the reader tick eight boxes that mean one thing.
@@ -63,17 +102,32 @@ export function RunDetailPage() {
     const spec = run.data.spec;
     const firstVariable = spec.objectTypes[0]?.variables[0]?.name;
     if (!firstVariable) return;
-    const keys = spec.objects.slice(0, 6).map((object) => `${object.id}.${firstVariable}`);
+    // A group is recorded as statistics, not as one series per member, so its keys carry a
+    // statistic suffix. Seeding the plain key gave every population run an empty opening chart,
+    // which reads as a broken tool rather than as a naming mismatch.
+    const keys = spec.objects.slice(0, 6).flatMap((object) =>
+      object.count > 1
+        ? [
+            `${object.id}.${firstVariable}.mean`,
+            `${object.id}.${firstVariable}.min`,
+            `${object.id}.${firstVariable}.max`,
+          ]
+        : [`${object.id}.${firstVariable}`],
+    );
     setPanels([{ id: "panel-1", title: firstVariable, seriesKeys: keys }]);
   }, [run.data?.spec, panels.length]);
 
   const status = live?.status ?? run.data?.summary.status;
   const isLive = status === "RUNNING";
 
-  const markers = useMemo(
-    () => (cursorTick === null ? [] : [{ tick: cursorTick, label: `tick ${formatTick(cursorTick)}` }]),
-    [cursorTick],
-  );
+  // The clicked tick stays put; the hovered one follows the pointer through the log, so reading an
+  // entry shows immediately where on the chart it happened.
+  const markers = useMemo(() => {
+    const marks: { tick: number; label: string }[] = [];
+    if (cursorTick !== null) marks.push({ tick: cursorTick, label: `tick ${formatTick(cursorTick)}` });
+    if (hoverTick !== null && hoverTick !== cursorTick) marks.push({ tick: hoverTick, label: "" });
+    return marks;
+  }, [cursorTick, hoverTick]);
 
   if (run.isLoading) {
     return (
@@ -133,8 +187,10 @@ export function RunDetailPage() {
 
       <div className="grid min-h-0 flex-1 gap-3 p-3 xl:grid-cols-[1fr_360px]">
         <div className="flex min-h-0 min-w-0 flex-col gap-3">
-          <div className="flex items-center gap-1">
-            {(["charts", "relationships", "memories"] as const).map((value) => (
+          {/* Wraps rather than overflowing: this row now carries the formatting controls as well as
+              the tabs, which is enough to outgrow a narrow window. */}
+          <div className="flex flex-wrap items-center gap-1">
+            {(["charts", "distribution", "relationships", "memories"] as const).map((value) => (
               <button
                 key={value}
                 type="button"
@@ -149,8 +205,35 @@ export function RunDetailPage() {
                 {value}
               </button>
             ))}
-            <span className="ml-auto text-[11px] text-[var(--text-muted)]">
-              {formatTick(run.data.sampleCount)} samples · {formatTick(run.data.logEntryCount)} log entries
+            <span className="ml-auto flex items-center gap-3 text-[11px] text-[var(--text-muted)]">
+              <label className="flex items-center gap-1" title="Decimal places, used everywhere a value is written">
+                decimals
+                <select
+                  className="rounded border border-[var(--border)] bg-transparent px-1 py-0.5 text-[11px]"
+                  value={format.decimals}
+                  onChange={(event) => setFormat({ decimals: Number(event.target.value) })}
+                >
+                  {[0, 1, 2, 3, 4].map((places) => (
+                    <option key={places} value={places}>
+                      {places}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label
+                className="flex items-center gap-1"
+                title="Write values between -1 and 1 as percentages. Values outside that range are left alone."
+              >
+                <input
+                  type="checkbox"
+                  checked={format.percent}
+                  onChange={(event) => setFormat({ percent: event.target.checked })}
+                />
+                %
+              </label>
+              <span>
+                {formatTick(run.data.sampleCount)} samples · {formatTick(run.data.logEntryCount)} log entries
+              </span>
             </span>
           </div>
 
@@ -164,16 +247,48 @@ export function RunDetailPage() {
                 live={isLive}
                 markers={markers}
                 objectTypes={objectTypes}
+                groups={groups}
+                events={chartEvents}
+                view={workspace.state}
+                onViewChange={workspace.update}
                 onTickClick={setCursorTick}
+                range={range}
+                onRangeChange={setRange}
+                format={format}
+              />
+            ) : null}
+            {tab === "distribution" ? (
+              <DistributionPanel
+                runId={runId}
+                spec={run.data?.spec ?? null}
+                live={isLive}
+                theme={theme}
+                tick={summary.tick}
+                format={format}
               />
             ) : null}
             {tab === "relationships" ? <RelationshipPanel runId={runId} theme={theme} /> : null}
-            {tab === "memories" ? <MemoryPanel runId={runId} objectIds={objectIds} /> : null}
+            {tab === "memories" ? (
+              <MemoryPanel
+                runId={runId}
+                objectIds={objectIds}
+                spec={run.data?.spec ?? null}
+                tick={summary.tick}
+                format={format}
+                tickRange={crossFilter ? range : null}
+              />
+            ) : null}
           </div>
         </div>
 
         <div className="grid min-h-0 grid-rows-2 gap-3">
-          <EventLogPanel runId={runId} live={isLive} onTickSelect={setCursorTick} />
+          <EventLogPanel
+                runId={runId}
+                live={isLive}
+                onTickSelect={setCursorTick}
+                onTickHover={setHoverTick}
+                tickRange={crossFilter ? range : null}
+              />
           <CheckpointPanel
             runId={runId}
             forks={forks.data ?? []}
@@ -185,14 +300,44 @@ export function RunDetailPage() {
         </div>
       </div>
 
-      {cursorTick !== null ? (
-        <Card className="mx-3 mb-3 flex items-center gap-3 px-3 py-2 text-xs">
-          <span className="text-[var(--text-muted)]">
-            Marker at tick <span className="tabular">{formatTick(cursorTick)}</span>
-          </span>
-          <Button size="sm" variant="ghost" onClick={() => setCursorTick(null)}>
-            Clear
-          </Button>
+      {cursorTick !== null || range !== null ? (
+        <Card className="mx-3 mb-3 flex flex-wrap items-center gap-3 px-3 py-2 text-xs">
+          {cursorTick !== null ? (
+            <>
+              <span className="text-[var(--text-muted)]">
+                Marker at tick <span className="tabular">{formatTick(cursorTick)}</span>
+              </span>
+              <Button size="sm" variant="ghost" onClick={() => setCursorTick(null)}>
+                Clear marker
+              </Button>
+            </>
+          ) : null}
+
+          {range !== null ? (
+            <>
+              <span className="text-[var(--text-muted)]">
+                Ticks <span className="tabular">{formatTick(Math.round(range.from))}</span>–
+                <span className="tabular">{formatTick(Math.round(range.to))}</span> selected
+              </span>
+              {/* Offered rather than applied: narrowing a chart is about looking closely, and
+                  silently hiding log entries outside the window would make the run look like it
+                  did less than it did. */}
+              <label
+                className="flex items-center gap-1.5 text-[var(--text-secondary)]"
+                title="Show only the log entries and memories laid down inside the selected ticks"
+              >
+                <input
+                  type="checkbox"
+                  checked={crossFilter}
+                  onChange={(event) => setCrossFilter(event.target.checked)}
+                />
+                Filter the log and memories to this window
+              </label>
+              <Button size="sm" variant="ghost" onClick={() => setRange(null)}>
+                Clear selection
+              </Button>
+            </>
+          ) : null}
         </Card>
       ) : null}
     </div>

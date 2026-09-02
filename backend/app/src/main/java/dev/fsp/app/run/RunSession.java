@@ -177,6 +177,32 @@ public final class RunSession {
         }
     }
 
+    /** Ticks before which a run checkpoints more often than its configured interval. */
+    private static final long EARLY_PHASE_TICKS = 250L;
+
+    /** How often to checkpoint inside that early phase. */
+    private static final long EARLY_INTERVAL = 25L;
+
+    /**
+     * Whether this tick deserves an automatic checkpoint.
+     *
+     * <p>A run is only resumable from its newest checkpoint, so with an interval of two hundred and
+     * fifty a run stopped at tick two hundred has nothing at all to go back to and is lost. That is
+     * not a rare case: it is every run interrupted in its first few minutes, which is most of the
+     * ones anybody is actively watching.
+     *
+     * <p>So the early part of a run checkpoints often and then settles into the configured
+     * interval. The cost is a handful of extra snapshots at the point when a run is smallest and
+     * they are cheapest.
+     */
+    private boolean shouldAutoCheckpoint() {
+        long tick = state.tick();
+        long interval = tick <= EARLY_PHASE_TICKS
+                ? Math.min(EARLY_INTERVAL, spec.settings().autoCheckpointInterval())
+                : spec.settings().autoCheckpointInterval();
+        return interval > 0 && tick % interval == 0;
+    }
+
     /** Runs one tick and records what it produced. Returns false when the run has finished. */
     private boolean stepOnce() {
         TickReport report = engine.tick(state);
@@ -190,8 +216,7 @@ public final class RunSession {
             checkpointRequested = false;
             pendingCheckpointLabel = null;
         }
-        if (spec.settings().autoCheckpointsEnabled()
-                && state.tick() % spec.settings().autoCheckpointInterval() == 0) {
+        if (spec.settings().autoCheckpointsEnabled() && shouldAutoCheckpoint()) {
             writeCheckpoint(null, true);
         }
         if (spec.settings().hasTickLimit() && state.tick() >= spec.settings().maxTicks()) {

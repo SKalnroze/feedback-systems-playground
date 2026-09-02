@@ -121,6 +121,11 @@ public class World {
         objects.add(ObjectSpec.of(id, "person"));
     }
 
+    /** One authored object standing for many, which is how a population is expressed. */
+    public void addCrowd(String id, int members) {
+        objects.add(ObjectSpec.of(id, "person").times(members));
+    }
+
     public void memorySettings(MemorySettings settings) {
         this.memorySettings = settings;
     }

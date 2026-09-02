@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/primitives";
+import { ShortcutsOverlay } from "@/components/ui/ShortcutsOverlay";
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
@@ -47,7 +48,8 @@ export function AppShell() {
           })}
         </nav>
 
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-1">
+          <ShortcutsOverlay />
           <Button
             variant="ghost"
             size="icon"

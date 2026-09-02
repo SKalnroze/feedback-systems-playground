@@ -43,3 +43,11 @@ Feature: What a run did can be looked at afterwards
     When the run is stepped by 5 ticks
     Then the series catalogue includes "ana.trust"
     And the series catalogue includes "ana.memoryStrength"
+
+  # The distribution is the answer to the question a mean cannot address: a population sitting
+  # uniformly at the average, and one split into two halves either side of it, report the same mean.
+  Scenario: A group's distribution shows the spread its mean hides
+    Given a run of a system with a group of 40 people
+    When the run is stepped by 30 ticks
+    Then the distribution of "trust" across "crowd" covers all 40 members
+    And the distribution buckets sum to the number of members

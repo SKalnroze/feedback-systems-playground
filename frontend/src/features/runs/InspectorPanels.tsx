@@ -1,4 +1,4 @@
-import type { Checkpoint, LogEntry, MemoryView, RunSummary } from "@/api/types";
+import type { Checkpoint, DecayModel, LogEntry, MemoryView, RunSummary, SystemSpec } from "@/api/types";
 import {
   useCheckpoints,
   useDescribeCheckpoint,
@@ -9,6 +9,8 @@ import {
 } from "@/api/queries";
 import { api } from "@/api/client";
 import { RelationshipHeatmap } from "@/components/charts/RelationshipHeatmap";
+import { Sparkline } from "@/components/charts/Sparkline";
+import { decayCurvePoints, decayStrength, halfLifeOf } from "@/features/systems/decayCurve";
 import {
   Badge,
   Button,
@@ -24,9 +26,10 @@ import {
 import { ConfirmButton } from "@/components/ui/ConfirmButton";
 import { EditableDescription } from "@/components/ui/EditableDescription";
 import { PanelBody, panelPhase } from "@/components/ui/PanelBody";
-import { cn, formatBytes, formatNumber, formatTick } from "@/lib/utils";
+import { cn, formatBytes, formatTick } from "@/lib/utils";
+import { DEFAULT_FORMAT, formatValue, type ValueFormat } from "@/lib/valueFormat";
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 
 const LOG_TYPES = ["", "EVENT", "REACTIVATION", "INTERACTION", "CHECKPOINT", "CONTROL"] as const;
 
@@ -49,30 +52,42 @@ export function EventLogPanel({
   runId,
   live,
   onTickSelect,
+  onTickHover,
+  tickRange = null,
 }: {
   runId: string;
   live: boolean;
   onTickSelect: (tick: number) => void;
+  /** Marks the tick on every chart while the pointer is over an entry, and clears on leaving. */
+  onTickHover?: (tick: number | null) => void;
+  /** Set when the reader has selected a window on a chart and asked to narrow the log to it. */
+  tickRange?: { from: number; to: number } | null;
 }) {
   const [type, setType] = useState<string>("");
   const [search, setSearch] = useState("");
-  // A wider page is fetched when searching: filtering client-side over the default 200 would
-  // silently answer "nothing matched" when the match was simply further back.
-  const log = useRunLog(runId, type || undefined, search ? 2000 : 200, live ? 2000 : false);
+  // A wider page is fetched when searching or when a tick window is in force: filtering client-side
+  // over the default 200 would silently answer "nothing matched" when the match was simply further
+  // back, and a selected window is usually older than the newest two hundred entries.
+  const log = useRunLog(runId, type || undefined, search || tickRange ? 2000 : 200, live ? 2000 : false);
 
   const needle = search.trim().toLowerCase();
   const entries = (log.data?.items ?? []).filter(
     (entry: LogEntry) =>
-      needle === "" ||
-      entry.detail.toLowerCase().includes(needle) ||
-      (entry.subject ?? "").toLowerCase().includes(needle),
+      (needle === "" ||
+        entry.detail.toLowerCase().includes(needle) ||
+        (entry.subject ?? "").toLowerCase().includes(needle)) &&
+      (!tickRange || (entry.tick >= tickRange.from && entry.tick <= tickRange.to)),
   );
 
   return (
     <Card className="flex min-h-0 flex-col">
       <CardHeader
         title="What happened"
-        subtitle="Newest first"
+        subtitle={
+          tickRange
+            ? `Newest first · ticks ${Math.round(tickRange.from)}–${Math.round(tickRange.to)} only`
+            : "Newest first"
+        }
         actions={
           <>
             {log.isFetching ? <Spinner /> : null}
@@ -111,9 +126,23 @@ export function EventLogPanel({
             phase={panelPhase(log, entries.length === 0)}
             error={log.error}
             skeletonRows={6}
-            emptyTitle={needle ? "Nothing matches that search" : "Nothing logged yet"}
+            emptyTitle={
+              needle
+                ? "Nothing matches that search"
+                : tickRange
+                  ? "Nothing logged in the selected ticks"
+                  : "Nothing logged yet"
+            }
             emptyDescription={
-              needle ? "Try a shorter search, or a different entry type." : "Start the run to see what it does."
+              needle
+                ? "Try a shorter search, or a different entry type."
+                : tickRange
+                  ? // Not the same claim as "this run has logged nothing". Saying that while a
+                    // window is in force would blame the run for the reader's own selection.
+                    `The run logged nothing between ticks ${Math.round(tickRange.from)} and ${Math.round(
+                      tickRange.to,
+                    )}. Widen the selection on the chart, or clear it.`
+                  : "Start the run to see what it does."
             }
           >
             {null}
@@ -125,6 +154,8 @@ export function EventLogPanel({
                 <button
                   type="button"
                   onClick={() => onTickSelect(entry.tick)}
+                  onMouseEnter={() => onTickHover?.(entry.tick)}
+                  onMouseLeave={() => onTickHover?.(null)}
                   className="flex w-full items-start gap-2 px-3 py-1.5 text-left hover:bg-[var(--surface-2)]"
                 >
                   <span className="tabular w-14 shrink-0 text-[var(--text-muted)]">
@@ -137,7 +168,14 @@ export function EventLogPanel({
             ))}
           </ul>
         ) : (
-          <EmptyState title="Nothing logged yet" description="Step the run to see what it does." />
+          <EmptyState
+            title={tickRange ? "Nothing logged in the selected ticks" : "Nothing logged yet"}
+            description={
+              tickRange
+                ? "Widen the selection on the chart, or clear it."
+                : "Step the run to see what it does."
+            }
+          />
         )}
       </div>
     </Card>
@@ -145,14 +183,37 @@ export function EventLogPanel({
 }
 
 /** What one object currently remembers, and how vividly. */
-export function MemoryPanel({ runId, objectIds }: { runId: string; objectIds: string[] }) {
+export function MemoryPanel({
+  runId,
+  objectIds,
+  spec = null,
+  tick = 0,
+  format = DEFAULT_FORMAT,
+  tickRange = null,
+}: {
+  runId: string;
+  objectIds: string[];
+  /** Needed for the decay preview: the forgetting model lives on the holder's object type. */
+  spec?: SystemSpec | null;
+  /** The run's current tick, so a memory's age can be placed on its own curve. */
+  tick?: number;
+  format?: ValueFormat;
+  /** Set when a chart selection is being used to narrow what is shown. */
+  tickRange?: { from: number; to: number } | null;
+}) {
   const [ownerId, setOwnerId] = useState<string>("");
   const [sort, setSort] = useState<"strength" | "age" | "recalls" | "feeling">("strength");
+  const [expanded, setExpanded] = useState<number | null>(null);
   const memories = useMemories(runId, ownerId || undefined);
 
   // Sorted here rather than in SQL: the page is already capped, and switching the ordering is the
   // sort of thing a reader does repeatedly while looking at one set of memories.
-  const rows = [...(memories.data?.items ?? [])].sort((a, b) => {
+  const rows = [...(memories.data?.items ?? [])]
+    .filter(
+      (memory) =>
+        !tickRange || (memory.createdTick >= tickRange.from && memory.createdTick <= tickRange.to),
+    )
+    .sort((a, b) => {
     switch (sort) {
       case "age":
         return a.createdTick - b.createdTick;
@@ -162,8 +223,21 @@ export function MemoryPanel({ runId, objectIds }: { runId: string; objectIds: st
         return a.valence - b.valence;
       default:
         return b.currentStrength - a.currentStrength;
-    }
-  });
+      }
+    });
+
+  /**
+   * The forgetting model the holder of a memory is subject to.
+   *
+   * Group members carry ids like `townsfolk#12`; the settings live on the object they are a member
+   * of, so the suffix is stripped before the lookup.
+   */
+  function memorySettings(memory: MemoryView) {
+    const objectId = memory.ownerId.split("#")[0];
+    const object = spec?.objects.find((candidate) => candidate.id === objectId);
+    const type = spec?.objectTypes.find((candidate) => candidate.id === object?.typeId);
+    return type?.memory ?? null;
+  }
 
   /**
    * Current strength against what it was first laid down at.
@@ -181,7 +255,11 @@ export function MemoryPanel({ runId, objectIds }: { runId: string; objectIds: st
     <Card className="flex min-h-0 flex-col">
       <CardHeader
         title="Memories"
-        subtitle="As evaluated at the last flush"
+        subtitle={
+          tickRange
+            ? `Laid down between ticks ${Math.round(tickRange.from)} and ${Math.round(tickRange.to)}`
+            : "As evaluated at the last flush"
+        }
         actions={
           <>
           <Select
@@ -219,8 +297,12 @@ export function MemoryPanel({ runId, objectIds }: { runId: string; objectIds: st
             phase={panelPhase(memories, rows.length === 0)}
             error={memories.error}
             skeletonRows={6}
-            emptyTitle="No memories yet"
-            emptyDescription="Memories appear once an event or an interaction gives someone something to remember."
+            emptyTitle={tickRange ? "No memories laid down in those ticks" : "No memories yet"}
+            emptyDescription={
+              tickRange
+                ? "Nobody formed a memory inside the selected window. Widen it on the chart, or clear it."
+                : "Memories appear once an event or an interaction gives someone something to remember."
+            }
           >
             {null}
           </PanelBody>
@@ -239,12 +321,25 @@ export function MemoryPanel({ runId, objectIds }: { runId: string; objectIds: st
             </thead>
             <tbody>
               {rows.map((memory: MemoryView) => (
-                <tr key={memory.id} className="border-b border-[var(--border)]/60">
-                  <td className="px-3 py-1.5">{memory.ownerId}</td>
+                <Fragment key={memory.id}>
+                <tr
+                  className={cn(
+                    "cursor-pointer border-b border-[var(--border)]/60 hover:bg-[var(--surface-2)]",
+                    expanded === memory.id && "bg-[var(--surface-2)]",
+                  )}
+                  onClick={() => setExpanded(expanded === memory.id ? null : memory.id)}
+                  title="Show how this memory fades"
+                >
+                  <td className="px-3 py-1.5">
+                    <span className="mr-1 text-[10px] text-[var(--text-muted)]">
+                      {expanded === memory.id ? "▾" : "▸"}
+                    </span>
+                    {memory.ownerId}
+                  </td>
                   <td className="px-3 py-1.5">{memory.subjectId}</td>
                   <td className="px-3 py-1.5 text-[var(--text-muted)]">{memory.kind}</td>
                   <td className="tabular px-3 py-1.5 text-right">
-                    <StrengthBar value={memory.currentStrength} />
+                    <StrengthBar value={memory.currentStrength} format={format} />
                   </td>
                   <td
                     className={cn(
@@ -253,7 +348,7 @@ export function MemoryPanel({ runId, objectIds }: { runId: string; objectIds: st
                       memory.valence > 0.05 && "text-[var(--diverging-positive)]",
                     )}
                   >
-                    {formatNumber(memory.valence, 2)}
+                    {formatValue(memory.valence, format)}
                   </td>
                   <td
                     className="tabular px-3 py-1.5 text-right text-[var(--text-muted)]"
@@ -265,13 +360,30 @@ export function MemoryPanel({ runId, objectIds }: { runId: string; objectIds: st
                     {memory.reactivationCount}
                   </td>
                 </tr>
+                {expanded === memory.id ? (
+                  <tr className="border-b border-[var(--border)]/60 bg-[var(--surface-2)]/50">
+                    <td colSpan={7} className="px-3 py-2">
+                      <DecayPreview
+                        memory={memory}
+                        settings={memorySettings(memory)}
+                        tick={tick}
+                        format={format}
+                      />
+                    </td>
+                  </tr>
+                ) : null}
+                </Fragment>
               ))}
             </tbody>
           </table>
         ) : (
           <EmptyState
-            title="No memories yet"
-            description="Memories appear once an event or an interaction gives someone something to remember."
+            title={tickRange ? "No memories laid down in those ticks" : "No memories yet"}
+            description={
+              tickRange
+                ? "Nobody formed a memory inside the selected window. Widen it on the chart, or clear it."
+                : "Memories appear once an event or an interaction gives someone something to remember."
+            }
           />
         )}
       </div>
@@ -280,7 +392,7 @@ export function MemoryPanel({ runId, objectIds }: { runId: string; objectIds: st
 }
 
 /** A strength reading shown as both a bar and a number, so it is legible without colour. */
-function StrengthBar({ value }: { value: number }) {
+function StrengthBar({ value, format = DEFAULT_FORMAT }: { value: number; format?: ValueFormat }) {
   return (
     <span className="flex items-center justify-end gap-2">
       <span className="h-1.5 w-16 overflow-hidden rounded-full bg-[var(--surface-3)]">
@@ -289,20 +401,125 @@ function StrengthBar({ value }: { value: number }) {
           style={{ width: `${Math.max(2, Math.min(100, value * 100))}%` }}
         />
       </span>
-      {formatNumber(value, 2)}
+      {formatValue(value, format)}
     </span>
+  );
+}
+
+/**
+ * How one memory fades, and when it stops being retrievable.
+ *
+ * The table says how strong a trace is now; this says where it is heading. The dashed rule is the
+ * retrieval threshold — below it the memory is still stored but can no longer be recalled, which is
+ * the moment that actually changes behaviour in a run and is invisible in a column of numbers.
+ *
+ * The curve is the unrehearsed one, as `decayCurve` draws everywhere else. A memory that has been
+ * recalled sits above it, and the note beneath says so rather than drawing a curve that pretends to
+ * know when the next recall will happen.
+ */
+function DecayPreview({
+  memory,
+  settings,
+  tick,
+  format,
+}: {
+  memory: MemoryView;
+  settings: { defaultDecay: DecayModel; retrievalThreshold: number } | null;
+  tick: number;
+  format: ValueFormat;
+}) {
+  if (!settings) {
+    return (
+      <p className="text-[11px] text-[var(--text-muted)]">
+        The holder of this memory is not in the run's current spec, so its forgetting model cannot be
+        looked up.
+      </p>
+    );
+  }
+
+  const model = settings.defaultDecay;
+  const threshold = settings.retrievalThreshold;
+  const age = Math.max(0, tick - memory.createdTick);
+  const forgottenAt = halfLifeOf(model, threshold);
+
+  // Far enough to show the crossing and a little beyond it, and never shorter than the memory's own
+  // age: a curve that stops before "now" cannot show where this memory has got to.
+  const horizon = Math.max(60, age * 1.4, forgottenAt !== null ? forgottenAt * 1.6 : 200);
+  const points = decayCurvePoints(model, horizon, 80);
+  const nowStrength = decayStrength(model, age);
+
+  return (
+    <div className="flex flex-wrap items-center gap-4">
+      <Sparkline
+        points={points}
+        width={220}
+        height={44}
+        threshold={threshold}
+        marks={[age]}
+        yMin={0}
+        yMax={1}
+        label={`Forgetting curve for a ${model.kind} memory`}
+        colour="var(--accent)"
+      />
+      <div className="text-[11px] leading-relaxed text-[var(--text-muted)]">
+        <div>
+          <span className="text-[var(--text-secondary)]">{model.kind}</span> decay, retrievable above{" "}
+          <span className="tabular">{formatValue(threshold, format)}</span>
+        </div>
+        <div>
+          Laid down at tick <span className="tabular">{formatTick(memory.createdTick)}</span>, now{" "}
+          <span className="tabular">{formatTick(age)}</span> ticks old
+        </div>
+        <div>
+          {forgottenAt === null ? (
+            <>Never falls below the threshold on its own.</>
+          ) : age >= forgottenAt ? (
+            <>
+              Unrehearsed, it would have dropped out of reach at tick{" "}
+              <span className="tabular">{formatTick(memory.createdTick + forgottenAt)}</span>.
+            </>
+          ) : (
+            <>
+              Drops out of reach around tick{" "}
+              <span className="tabular">{formatTick(memory.createdTick + forgottenAt)}</span>, in{" "}
+              <span className="tabular">{formatTick(forgottenAt - age)}</span> ticks.
+            </>
+          )}
+        </div>
+        {memory.reactivationCount > 0 ? (
+          <div className="text-[var(--text-secondary)]">
+            Recalled {memory.reactivationCount}{" "}
+            {memory.reactivationCount === 1 ? "time" : "times"}, so it stands at{" "}
+            <span className="tabular">{formatValue(memory.currentStrength, format)}</span> rather than
+            the <span className="tabular">{formatValue(nowStrength, format)}</span> this curve predicts.
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
 /** How the group currently sees itself. */
 export function RelationshipPanel({ runId, theme }: { runId: string; theme: string }) {
   const relationships = useRelationships(runId);
+  const [order, setOrder] = useState<"name" | "warmth">("name");
 
   return (
     <Card>
       <CardHeader
         title="Who thinks what of whom"
         subtitle="Strength-weighted average feeling, derived from stored memories"
+        actions={
+          <Select
+            className="h-7 text-xs"
+            value={order}
+            onChange={(event) => setOrder(event.target.value as typeof order)}
+            aria-label="Order the matrix"
+          >
+            <option value="name">by name</option>
+            <option value="warmth">by how they are regarded</option>
+          </Select>
+        }
       />
       <div className="p-2">
         <PanelBody
@@ -312,7 +529,7 @@ export function RelationshipPanel({ runId, theme }: { runId: string; theme: stri
           emptyTitle="Nobody remembers anything yet"
           emptyDescription="The matrix fills in once interactions or events have given people something to remember."
         >
-          <RelationshipHeatmap cells={relationships.data ?? []} theme={theme} />
+          <RelationshipHeatmap cells={relationships.data ?? []} theme={theme} order={order} />
         </PanelBody>
       </div>
     </Card>

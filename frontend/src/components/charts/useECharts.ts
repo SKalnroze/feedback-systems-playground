@@ -1,10 +1,11 @@
 import * as echarts from "echarts/core";
-import { LineChart, HeatmapChart } from "echarts/charts";
+import { BarChart, LineChart, HeatmapChart } from "echarts/charts";
 import {
   DataZoomComponent,
   GridComponent,
   LegendComponent,
   MarkLineComponent,
+  ToolboxComponent,
   TooltipComponent,
   VisualMapComponent,
 } from "echarts/components";
@@ -15,12 +16,18 @@ import { useEffect, useRef } from "react";
 // the size of everything else in this application put together.
 echarts.use([
   LineChart,
+  // Bar is needed for the distribution histogram. A series whose type is not registered draws
+  // absolutely nothing and reports no error, which looks exactly like a data problem.
+  BarChart,
   HeatmapChart,
   GridComponent,
   TooltipComponent,
   LegendComponent,
   DataZoomComponent,
   MarkLineComponent,
+  // The toolbox carries the drag-a-range-to-zoom tool. Like BarChart above, an unregistered
+  // component is simply absent from the rendered chart rather than being an error.
+  ToolboxComponent,
   VisualMapComponent,
   CanvasRenderer,
 ]);

@@ -66,3 +66,13 @@ Feature: Runs can be driven from the outside
     And the run is unloaded from memory
     And the run is opened again
     Then no samples are recorded after tick 30
+
+  # Samples are the record of what happened and cannot be rebuilt from anything else; the live state
+  # can be, but only from a checkpoint. When there is no checkpoint, keeping the evidence and giving
+  # up on resuming is the right trade - deleting a run's history to tidy up its bookkeeping is not.
+  Scenario: A run that stopped before its first checkpoint keeps its history
+    Given a run is created
+    When the run is stepped by 25 ticks
+    And the run is unloaded from memory without checkpointing
+    Then opening the run again is refused
+    And samples are still recorded up to tick 25

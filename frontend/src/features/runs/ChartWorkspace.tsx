@@ -2,15 +2,35 @@ import type { SeriesDefinition, SeriesView } from "@/api/types";
 import { useSeriesCatalogue, useSeriesData } from "@/api/queries";
 import { TimeSeriesChart } from "@/components/charts/TimeSeriesChart";
 import { Badge, Button, Card, CardHeader, EmptyState, Select } from "@/components/ui/primitives";
-import { cn, seriesColor, seriesLabel } from "@/lib/utils";
+import { cn, describeSeriesKey, seriesColor } from "@/lib/utils";
 import { api } from "@/api/client";
+import type { ChartWorkspaceState } from "@/features/runs/useChartWorkspace";
+import {
+  extractBands,
+  presentSeries,
+  TRANSFORM_AXIS,
+  TRANSFORM_HINT,
+  TRANSFORM_LABEL,
+  type SeriesTransform,
+} from "@/features/runs/seriesTransforms";
 import { PanelBody, panelPhase } from "@/components/ui/PanelBody";
+import type { ValueFormat } from "@/lib/valueFormat";
 import { useMemo, useState } from "react";
 
 export type ChartPanelConfig = {
   id: string;
   title: string;
   seriesKeys: string[];
+  /**
+   * Series that stay chosen but are not drawn.
+   *
+   * Separate from `seriesKeys` on purpose: deselecting a line to see past it loses its colour and
+   * its place in the panel, so putting it back is never quite putting it back. Hidden series are
+   * still fetched, which is what makes showing one again instant.
+   */
+  hidden?: string[];
+  /** Colours the reader picked, by series key. */
+  colours?: Record<string, string>;
 };
 
 const RESOLUTIONS = [
@@ -36,7 +56,14 @@ export function ChartWorkspace({
   live,
   markers,
   objectTypes,
+  groups,
+  events,
+  view,
+  onViewChange,
   onTickClick,
+  range,
+  onRangeChange,
+  format,
 }: {
   runId: string;
   panels: ChartPanelConfig[];
@@ -46,15 +73,24 @@ export function ChartWorkspace({
   markers: { tick: number; label: string }[];
   /** Object id to object type id, used to offer whole-type selections in the picker. */
   objectTypes: Map<string, string>;
+  /** Object id to its label and instance count, for saying series keys in words. */
+  groups: Map<string, { label: string; count: number }>;
+  /** Events from the run log, drawn on every panel's time axis. */
+  events: { tick: number; type: string; detail: string }[];
+  /** Persisted view settings, owned by the page so they survive a reload. */
+  view: ChartWorkspaceState;
+  onViewChange: (change: Partial<ChartWorkspaceState>) => void;
   onTickClick?: (tick: number) => void;
+  /**
+   * The selected tick window, owned by the page rather than by this component: once a range can
+   * filter the log and the memory table too, it stops being a property of the charts.
+   */
+  range: { from: number; to: number } | null;
+  onRangeChange: (range: { from: number; to: number } | null) => void;
+  format: ValueFormat;
 }) {
   const catalogue = useSeriesCatalogue(runId);
-  const [resolution, setResolution] = useState(0);
-  const [range, setRange] = useState<{ from: number; to: number } | null>(null);
-  // Locking the y-axis to 0..1 makes panels comparable at a glance. Off by default because most
-  // variables are unit stocks and already sit in that band; on, it stops an auto-scaled panel of a
-  // barely-moving series from looking like a dramatic one.
-  const [lockAxis, setLockAxis] = useState(false);
+  const { resolution, transform, smoothing, lockAxis, columns, panelHeight } = view;
 
   const grouped = useMemo(() => groupSeries(catalogue.data ?? []), [catalogue.data]);
 
@@ -78,7 +114,7 @@ export function ChartWorkspace({
           <Select
             className="h-7 text-xs"
             value={resolution}
-            onChange={(event) => setResolution(Number(event.target.value))}
+            onChange={(event) => onViewChange({ resolution: Number(event.target.value) })}
           >
             {RESOLUTIONS.map((option) => (
               <option key={option.value} value={option.value}>
@@ -89,7 +125,70 @@ export function ChartWorkspace({
         </label>
 
         <label className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
-          <input type="checkbox" checked={lockAxis} onChange={(event) => setLockAxis(event.target.checked)} />
+          Show
+          <Select
+            className="h-7 text-xs"
+            value={transform}
+            title={TRANSFORM_HINT[transform]}
+            onChange={(event) => onViewChange({ transform: event.target.value as SeriesTransform })}
+          >
+            {(Object.keys(TRANSFORM_LABEL) as SeriesTransform[]).map((option) => (
+              <option key={option} value={option}>
+                {TRANSFORM_LABEL[option]}
+              </option>
+            ))}
+          </Select>
+        </label>
+
+        <label className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
+          Smoothing
+          <Select
+            className="h-7 text-xs"
+            value={smoothing}
+            title="A centred moving average. The raw line stays visible underneath."
+            onChange={(event) => onViewChange({ smoothing: Number(event.target.value) })}
+          >
+            {[1, 5, 15, 45].map((window) => (
+              <option key={window} value={window}>
+                {window === 1 ? "off" : `${window} ticks`}
+              </option>
+            ))}
+          </Select>
+        </label>
+
+        <label className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
+          Layout
+          <Select
+            className="h-7 text-xs"
+            value={columns}
+            onChange={(event) => onViewChange({ columns: Number(event.target.value) as 1 | 2 })}
+          >
+            <option value={1}>one column</option>
+            <option value={2}>two columns</option>
+          </Select>
+        </label>
+
+        <label className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
+          Height
+          <Select
+            className="h-7 text-xs"
+            value={panelHeight}
+            onChange={(event) => onViewChange({ panelHeight: Number(event.target.value) })}
+          >
+            {[180, 260, 380, 520].map((height) => (
+              <option key={height} value={height}>
+                {height}px
+              </option>
+            ))}
+          </Select>
+        </label>
+
+        <label className="flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
+          <input
+            type="checkbox"
+            checked={lockAxis}
+            onChange={(event) => onViewChange({ lockAxis: event.target.checked })}
+          />
           Lock y-axis 0–1
         </label>
 
@@ -105,12 +204,13 @@ export function ChartWorkspace({
         </a>
 
         {range ? (
-          <Button size="sm" variant="ghost" onClick={() => setRange(null)}>
+          <Button size="sm" variant="ghost" onClick={() => onRangeChange(null)}>
             Reset zoom ({range.from}–{range.to})
           </Button>
         ) : null}
       </div>
 
+      <div className={cn("grid gap-3", columns === 2 ? "lg:grid-cols-2" : "grid-cols-1")}>
       {panels.map((panel) => (
         <ChartPanel
           key={panel.id}
@@ -123,13 +223,20 @@ export function ChartWorkspace({
           lockAxis={lockAxis}
           range={range}
           markers={markers}
+          events={events}
+          transform={transform}
+          smoothing={smoothing}
+          panelHeight={panelHeight}
           objectTypes={objectTypes}
-          onRangeChange={setRange}
+          groups={groups}
+          format={format}
+          onRangeChange={onRangeChange}
           onTickClick={onTickClick}
           onChange={(next) => onPanelsChange(panels.map((item) => (item.id === panel.id ? next : item)))}
           onRemove={() => onPanelsChange(panels.filter((item) => item.id !== panel.id))}
         />
       ))}
+      </div>
 
       {panels.length === 0 ? (
         <Card>
@@ -153,7 +260,13 @@ function ChartPanel({
   lockAxis,
   range,
   markers,
+  events,
+  transform,
+  smoothing,
+  panelHeight,
   objectTypes,
+  groups,
+  format,
   onRangeChange,
   onTickClick,
   onChange,
@@ -168,7 +281,13 @@ function ChartPanel({
   lockAxis: boolean;
   range: { from: number; to: number } | null;
   markers: { tick: number; label: string }[];
+  events: { tick: number; type: string; detail: string }[];
+  transform: SeriesTransform;
+  smoothing: number;
+  panelHeight: number;
   objectTypes: Map<string, string>;
+  groups: Map<string, { label: string; count: number }>;
+  format: ValueFormat;
   onRangeChange: (range: { from: number; to: number } | null) => void;
   onTickClick?: (tick: number) => void;
   onChange: (panel: ChartPanelConfig) => void;
@@ -183,14 +302,39 @@ function ChartPanel({
     live ? 1500 : false,
   );
 
-  const series: SeriesView[] = data.data?.series ?? [];
-  const bucketed = series.some((entry) => entry.bucketed);
+  const hidden = panel.hidden ?? [];
+  const fetched: SeriesView[] = data.data?.series ?? [];
+  // Hidden series are dropped here, before presentation, so a group whose mean is hidden simply
+  // stops being a band rather than becoming a band with a hole where its middle line was.
+  const raw = fetched.filter((entry) => !hidden.includes(entry.key));
+  const bucketed = fetched.some((entry) => entry.bucketed);
+
+  // Presented, then split: transforms and smoothing apply to every series alike, and only then are
+  // a group's mean/min/max recognised and folded into one band. Doing it the other way round would
+  // normalise the three edges of a band against different ranges and tear it apart.
+  const presented = presentSeries(raw, transform, smoothing);
+  const { bands, rest: series } = extractBands(presented);
+
+  // What the axis measures. When every line is the same variable the axis can say so; a mixed panel
+  // can only honestly say "value", plus whatever transform is in force.
+  const variables = new Set(
+    [...series.map((entry) => entry.key), ...bands.map((band) => band.base)].map((key) =>
+      key.split(".").slice(1).join("."),
+    ),
+  );
+  const axisLabel =
+    transform === "raw"
+      ? variables.size === 1
+        ? [...variables][0]
+        : "value"
+      : TRANSFORM_AXIS[transform];
 
   // Three different nothings, which the panel used to report as one. No series picked is a
   // question for the reader; a request in flight is not their problem; a completed request with no
   // points means the range genuinely holds none.
   const nothingPicked = panel.seriesKeys.length === 0;
-  const noPoints = series.every((entry) => entry.points.length === 0);
+  const allHidden = !nothingPicked && raw.length === 0 && hidden.length > 0;
+  const noPoints = presented.every((entry) => entry.points.length === 0);
   const phase = panelPhase(data, noPoints, !nothingPicked);
 
   return (
@@ -207,7 +351,7 @@ function ChartPanel({
         subtitle={
           bucketed
             ? `Averaged into buckets of ${data.data?.resolution} ticks`
-            : `${series.length} series · every sampled tick`
+            : `${series.length + bands.length} series · every sampled tick`
         }
         actions={
           <>
@@ -225,7 +369,28 @@ function ChartPanel({
         <SeriesPicker
           catalogue={catalogue}
           selected={panel.seriesKeys}
+          hidden={hidden}
+          colours={panel.colours ?? {}}
           objectTypes={objectTypes}
+          groups={groups}
+          onToggleHidden={(key) =>
+            onChange({
+              ...panel,
+              hidden: hidden.includes(key) ? hidden.filter((item) => item !== key) : [...hidden, key],
+            })
+          }
+          onSetColour={(key, colour) =>
+            onChange({
+              ...panel,
+              colours: colour
+                ? { ...(panel.colours ?? {}), [key]: colour }
+                : // Removed rather than set to empty, so clearing an override returns the series to
+                  // its palette slot instead of painting it with an invalid colour.
+                  Object.fromEntries(
+                    Object.entries(panel.colours ?? {}).filter(([existing]) => existing !== key),
+                  ),
+            })
+          }
           onToggle={(key) =>
             onChange({
               ...panel,
@@ -248,23 +413,31 @@ function ChartPanel({
       ) : null}
 
       <div className="px-2 pb-2">
-        {nothingPicked ? (
+        {nothingPicked || allHidden ? (
           <div
             className="flex items-center justify-center text-xs text-[var(--text-muted)]"
-            style={{ height: 260 }}
+            style={{ height: panelHeight }}
           >
-            Pick one or more series to chart.
+            {allHidden
+              ? `All ${hidden.length} series in this panel are hidden — show one from the series list.`
+              : "Pick one or more series to chart."}
           </div>
         ) : (
         <PanelBody
           phase={phase}
           error={data.error}
-          height={260}
+          height={panelHeight}
           emptyTitle="No samples in this range"
           emptyDescription="The run has not reached these ticks, or the series was not sampled here."
         >
         <TimeSeriesChart
           series={series}
+          bands={bands}
+          axisLabel={axisLabel}
+          events={events}
+          colours={panel.colours ?? {}}
+          format={format}
+          height={panelHeight}
           theme={theme}
           markers={markers}
           range={range}
@@ -288,15 +461,25 @@ function ChartPanel({
 function SeriesPicker({
   catalogue,
   selected,
+  hidden,
+  colours,
   objectTypes,
+  groups,
   onToggle,
   onSetMany,
+  onToggleHidden,
+  onSetColour,
 }: {
   catalogue: Map<string, SeriesDefinition[]>;
   selected: string[];
+  hidden: string[];
+  colours: Record<string, string>;
   objectTypes: Map<string, string>;
+  groups: Map<string, { label: string; count: number }>;
   onToggle: (key: string) => void;
   onSetMany: (keys: string[], selected: boolean) => void;
+  onToggleHidden: (key: string) => void;
+  onSetColour: (key: string, colour: string | null) => void;
 }) {
   // One row per object type, listing the variables its objects share. Selecting "trust" here means
   // "every person's trust", which is nearly always what a reader wants and was previously eight
@@ -379,31 +562,89 @@ function SeriesPicker({
           <div className="flex flex-wrap gap-1.5">
             {entries.map((entry) => {
               const active = selected.includes(entry.seriesKey);
+              const isHidden = hidden.includes(entry.seriesKey);
+              const swatch = colours[entry.seriesKey] ?? seriesColor(entry.seriesKey);
               return (
-                <button
+                <span
                   key={entry.seriesKey}
-                  type="button"
-                  onClick={() => onToggle(entry.seriesKey)}
                   className={cn(
-                    "inline-flex items-center gap-1.5 rounded border px-2 py-1 text-xs transition-colors",
+                    "inline-flex items-center rounded border text-xs transition-colors",
                     active
                       ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--text-primary)]"
-                      : "border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--surface-2)]",
+                      : "border-[var(--border)] text-[var(--text-secondary)]",
+                    isHidden && "opacity-60",
                   )}
                 >
-                  <span
-                    aria-hidden
-                    className="size-2 rounded-sm"
-                    style={{ background: active ? seriesColor(entry.seriesKey) : "var(--border-strong)" }}
-                  />
-                  {seriesLabel(entry.seriesKey)}
-                </button>
+                  {/* The colour well is only offered for a series actually on the chart: choosing a
+                      colour for something not drawn is a setting with nothing to show for it. */}
+                  {active ? (
+                    <label
+                      className="cursor-pointer px-1.5 py-1"
+                      title="Choose this series' colour. Double-click the swatch to go back to the default."
+                    >
+                      <span
+                        aria-hidden
+                        className="block size-2 rounded-sm"
+                        style={{ background: swatch }}
+                        onDoubleClick={(event) => {
+                          event.preventDefault();
+                          onSetColour(entry.seriesKey, null);
+                        }}
+                      />
+                      <input
+                        type="color"
+                        className="sr-only"
+                        value={colours[entry.seriesKey] ?? "#4f8cff"}
+                        onChange={(event) => onSetColour(entry.seriesKey, event.target.value)}
+                        aria-label={`Colour for ${entry.seriesKey}`}
+                      />
+                    </label>
+                  ) : (
+                    <span
+                      aria-hidden
+                      className="mx-1.5 size-2 rounded-sm"
+                      style={{ background: "var(--border-strong)" }}
+                    />
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => onToggle(entry.seriesKey)}
+                    className="py-1 pr-1 hover:underline"
+                    title={active ? "Remove from this panel" : "Add to this panel"}
+                  >
+                    <span className={cn(isHidden && "line-through")} title={entry.seriesKey}>
+                      {describeSeriesKey(entry.seriesKey, groups)}
+                    </span>
+                  </button>
+
+                  {active ? (
+                    <button
+                      type="button"
+                      onClick={() => onToggleHidden(entry.seriesKey)}
+                      className="px-1.5 py-1 text-[10px] text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                      title={
+                        isHidden
+                          ? "Show this series again"
+                          : "Hide this series without losing its colour or its place"
+                      }
+                      aria-pressed={isHidden}
+                    >
+                      {isHidden ? "◌" : "●"}
+                    </button>
+                  ) : null}
+                </span>
               );
             })}
           </div>
         </div>
       ))}
-      {selected.length > 8 ? (
+      {hidden.length > 0 ? (
+        <p className="mb-1 text-[11px] text-[var(--text-muted)]">
+          {hidden.length} hidden — still fetched, so showing one again is instant.
+        </p>
+      ) : null}
+      {selected.length - hidden.length > 8 ? (
         <Badge tone="warning">
           {selected.length} series — beyond eight, colours repeat and the chart gets hard to read
         </Badge>

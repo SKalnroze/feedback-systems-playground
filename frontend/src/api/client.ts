@@ -1,5 +1,6 @@
 import type {
   Checkpoint,
+  Distribution,
   ObjectTemplate,
   ObjectTemplateVersion,
   ObjectTypeSpec,
@@ -207,6 +208,10 @@ export const api = {
     return request<Page<MemoryView>>(`/runs/${id}/memories?${query}`);
   },
   relationships: (id: string) => request<RelationshipCell[]>(`/runs/${id}/relationships`),
+  distribution: (id: string, group: string, variable: string, buckets = 24) => {
+    const query = new URLSearchParams({ group, variable, buckets: String(buckets) });
+    return request<Distribution>(`/runs/${id}/distribution?${query}`);
+  },
 
   // --- experiments ---
   startExperiment: (input: {

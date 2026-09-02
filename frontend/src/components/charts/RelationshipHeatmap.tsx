@@ -18,14 +18,32 @@ export function RelationshipHeatmap({
   theme,
   height = 320,
   onSelect,
+  order = "name",
 }: {
   cells: RelationshipCell[];
   theme: string;
   height?: number;
   onSelect?: (ownerId: string, subjectId: string) => void;
+  /** How rows and columns are arranged; sorting by feeling makes blocks visible. */
+  order?: "name" | "warmth";
 }) {
   const { option, people } = useMemo(() => {
-    const ids = Array.from(new Set(cells.flatMap((cell) => [cell.ownerId, cell.subjectId]))).sort();
+    const everyone = Array.from(new Set(cells.flatMap((cell) => [cell.ownerId, cell.subjectId])));
+    // Sorting by how each person is regarded on average puts the warmly-regarded together and the
+    // resented together, so a group that has split into camps shows up as blocks rather than as
+    // noise scattered across an alphabetical grid.
+    const warmth = new Map<string, number>();
+    for (const id of everyone) {
+      const about = cells.filter((cell) => cell.subjectId === id);
+      warmth.set(
+        id,
+        about.length ? about.reduce((total, cell) => total + cell.meanValence, 0) / about.length : 0,
+      );
+    }
+    const ids =
+      order === "warmth"
+        ? [...everyone].sort((left, right) => (warmth.get(right) ?? 0) - (warmth.get(left) ?? 0))
+        : [...everyone].sort();
     if (!ids.length) return { option: null, people: ids };
 
     const textMuted = cssVar("--text-muted", "#888");

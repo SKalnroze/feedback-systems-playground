@@ -82,6 +82,42 @@ export function formatRelativeTime(iso: string): string {
 }
 
 /** Human label for a series key such as `ana.trust` or `global.workload`. */
+/**
+ * A series key said in words.
+ *
+ * `staff.morale.mean` tells a reader who already knows the model exactly what it is, and tells
+ * everyone else nothing. Given the run's spec it becomes "average morale across 500 staff", which
+ * is the same fact with the decoding done.
+ */
+export function describeSeriesKey(
+  key: string,
+  groups: Map<string, { label: string; count: number }>,
+): string {
+  const statistic = /\.(mean|min|max)$/.exec(key)?.[1];
+  const base = statistic ? key.slice(0, -(statistic.length + 1)) : key;
+  const dot = base.indexOf(".");
+  if (dot < 0) return seriesLabel(key);
+
+  const owner = base.slice(0, dot);
+  const variable = base.slice(dot + 1).replace(/([A-Z])/g, " $1").toLowerCase();
+  const group = groups.get(owner);
+
+  if (!group || group.count <= 1) {
+    return statistic ? `${owner} · ${variable} (${statistic})` : seriesLabel(key);
+  }
+  const members = `${group.count.toLocaleString()} ${group.label}`;
+  switch (statistic) {
+    case "mean":
+      return `average ${variable} across ${members}`;
+    case "min":
+      return `lowest ${variable} among ${members}`;
+    case "max":
+      return `highest ${variable} among ${members}`;
+    default:
+      return `${variable} across ${members}`;
+  }
+}
+
 export function seriesLabel(key: string): string {
   const [head, ...rest] = key.split(".");
   if (!rest.length) return key;

@@ -437,3 +437,19 @@ export type ObjectTemplateVersion = {
   checksum: string;
   publishedAt: string;
 };
+
+// --- distributions --------------------------------------------------------------------------------
+
+export type DistributionBucket = { from: number; to: number; count: number };
+
+/** How a group's members are spread across one variable at a moment in the run. */
+export type Distribution = {
+  groupId: string;
+  variable: string;
+  tick: number;
+  members: number;
+  min: number;
+  max: number;
+  mean: number;
+  buckets: DistributionBucket[];
+};

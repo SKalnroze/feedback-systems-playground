@@ -167,6 +167,11 @@ public class RunRepository {
      * <p>Automatic checkpoints exist to survive a crash, not to provide history; the ones a user
      * asked for are never touched. Without this a long run quietly accumulates gigabytes.
      */
+    /** Removes every checkpoint of a run. Used to reproduce a hard stop, where none was written. */
+    public int deleteAllCheckpoints(UUID runId) {
+        return jdbc.sql("DELETE FROM checkpoint WHERE run_id = :runId").param("runId", runId).update();
+    }
+
     public int pruneAutomaticCheckpoints(UUID runId, int keep) {
         return jdbc.sql("""
                 DELETE FROM checkpoint WHERE id IN (
